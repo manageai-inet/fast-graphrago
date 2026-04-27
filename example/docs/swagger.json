@@ -1,0 +1,759 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "This is a simple implementation example of FastGraphRAG API server.",
+        "title": "FastGraphRAG API",
+        "contact": {
+            "name": "ManageAI Team",
+            "email": "manageai@inet.co.th"
+        },
+        "license": {
+            "name": "MIT"
+        },
+        "version": "v1.0.0"
+    },
+    "host": "localhost:3000",
+    "basePath": "/api/v1",
+    "paths": {
+        "/fastgraph/assets/refs/{kb_id}/{asset_type}": {
+            "get": {
+                "description": "Process getting assets by refs from knowledge base",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "FastGraph RAG API"
+                ],
+                "summary": "Get Assets By Refs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "asset type to be retrieved",
+                        "name": "asset_type",
+                        "in": "path"
+                    },
+                    {
+                        "type": "string",
+                        "description": "knowledge base id to be retrieved",
+                        "name": "kb_id",
+                        "in": "path"
+                    },
+                    {
+                        "type": "string",
+                        "description": "label to filter assets",
+                        "name": "label",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "reference ids to be retrieved",
+                        "name": "refIds",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "reference type to filter assets",
+                        "name": "refTypes",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "version of the asset to retrieve",
+                        "name": "version",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.AssetsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fastgraph/assets/{kb_id}": {
+            "get": {
+                "description": "Process getting assets by kb_id from knowledge base",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "FastGraph RAG API"
+                ],
+                "summary": "Get Assets By KbId",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "asset type to be retrieved",
+                        "name": "asset_type",
+                        "in": "path"
+                    },
+                    {
+                        "type": "string",
+                        "description": "knowledge base id to be retrieved",
+                        "name": "kb_id",
+                        "in": "path"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.AssetsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fastgraph/assets/{kb_id}/{asset_type}": {
+            "get": {
+                "description": "Process getting assets from knowledge base",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "FastGraph RAG API"
+                ],
+                "summary": "Get Assets",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "asset type to be retrieved",
+                        "name": "asset_type",
+                        "in": "path"
+                    },
+                    {
+                        "type": "string",
+                        "description": "knowledge base id to be retrieved",
+                        "name": "kb_id",
+                        "in": "path"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "asset id to be retrieved",
+                        "name": "assetIds",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "label to filter assets",
+                        "name": "label",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "version of the asset to retrieve",
+                        "name": "version",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.AssetsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fastgraph/index": {
+            "post": {
+                "description": "Process indexing a given document bound to specific kb_id, support pdf, docx, md, markdown, txt",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "FastGraph RAG API"
+                ],
+                "summary": "Indexing a document",
+                "parameters": [
+                    {
+                        "description": "Indexing Request",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.IndexingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.IndexingResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fastgraph/retrieve": {
+            "post": {
+                "description": "Process retrieving knowledge from knowledge base",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "FastGraph RAG API"
+                ],
+                "summary": "Retrieving knowledge from knowledge base",
+                "parameters": [
+                    {
+                        "description": "Retrieve Request",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.RetrieveRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.RetrieveResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fastgraph/versions/{kb_id}": {
+            "get": {
+                "description": "Process getting asset versions from knowledge base",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "FastGraph RAG API"
+                ],
+                "summary": "Get Asset Versions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "asset type to be retrieved",
+                        "name": "asset_type",
+                        "in": "path"
+                    },
+                    {
+                        "type": "string",
+                        "description": "knowledge base id to be retrieved",
+                        "name": "kb_id",
+                        "in": "path"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fastgraph/{kb_id}": {
+            "delete": {
+                "description": "Process deleting kb_id from knowledge base",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "FastGraph RAG API"
+                ],
+                "summary": "Delete KbId",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "KbId",
+                        "name": "kb_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "assetmanager.AssetRef": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "asset_type": {
+                    "type": "string"
+                },
+                "kb_id": {
+                    "type": "string"
+                },
+                "ref_type": {
+                    "type": "string"
+                }
+            }
+        },
+        "assetmanager.ContextualAsset": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "asset_type": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "embedding_model": {
+                    "type": "string"
+                },
+                "indexed_by": {
+                    "type": "string"
+                },
+                "kb_id": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "refs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/assetmanager.AssetRef"
+                    }
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "assetmanager.RetrievedAsset": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "asset_type": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "embedding_model": {
+                    "type": "string"
+                },
+                "indexed_by": {
+                    "type": "string"
+                },
+                "kb_id": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "refs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/assetmanager.AssetRef"
+                    }
+                },
+                "score": {
+                    "type": "number"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.AssetsResponse": {
+            "type": "object",
+            "properties": {
+                "assets": {
+                    "description": "assets",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/assetmanager.ContextualAsset"
+                    }
+                },
+                "assets_count": {
+                    "description": "assets count",
+                    "type": "integer"
+                },
+                "kb_id": {
+                    "description": "knowledge base id",
+                    "type": "string"
+                }
+            }
+        },
+        "models.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "failed_field": {
+                    "type": "string"
+                },
+                "tag": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.IndexingFile": {
+            "type": "object",
+            "required": [
+                "file_name",
+                "file_type"
+            ],
+            "properties": {
+                "file_content": {
+                    "description": "file content, if empty, it will download from fileUrl and extract content from it instead\neach element represents a fragment of given file (however, it will be considered as a page).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "file_name": {
+                    "description": "filename to be indexed, including extension",
+                    "type": "string",
+                    "example": "document.pdf"
+                },
+                "file_type": {
+                    "description": "file type to be indexed",
+                    "type": "string",
+                    "example": "pdf"
+                },
+                "file_url": {
+                    "description": "url to download file from, if file content is empty, it will download from this url and extract content from it instead",
+                    "type": "string",
+                    "example": "https://example.com/document.pdf"
+                }
+            }
+        },
+        "models.IndexingRequest": {
+            "type": "object",
+            "required": [
+                "file",
+                "kb_id"
+            ],
+            "properties": {
+                "config": {
+                    "description": "config to be indexed",
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "domain": {
+                    "description": "domain to be indexed, value should be a single word, phrase, or sentence.\nit's used to provide context to llm for extracting entities and relations.",
+                    "type": "string"
+                },
+                "entity_types": {
+                    "description": "entity types to be indexed, each element should be a single word (no space or using underscore instead)\nit's used to provide context to llm for extracting entities and relations.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "file": {
+                    "description": "files to be indexed",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IndexingFile"
+                        }
+                    ]
+                },
+                "kb_id": {
+                    "description": "knowledge base id to be indexed",
+                    "type": "string",
+                    "example": "kb_1234567890"
+                },
+                "labels": {
+                    "description": "labels to be indexed",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "metadata": {
+                    "description": "metadata to be indexed",
+                    "type": "object",
+                    "additionalProperties": {}
+                }
+            }
+        },
+        "models.IndexingResult": {
+            "type": "object",
+            "properties": {
+                "assets_count": {
+                    "description": "assets count by type, key is asset type and value is count",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "embedding_dim": {
+                    "description": "embedding dimension",
+                    "type": "integer"
+                },
+                "embedding_model": {
+                    "description": "embedding model",
+                    "type": "string"
+                },
+                "indexed_at": {
+                    "description": "indexed at",
+                    "type": "string"
+                },
+                "kb_id": {
+                    "description": "knowledge base id",
+                    "type": "string"
+                },
+                "version": {
+                    "description": "version",
+                    "type": "integer"
+                }
+            }
+        },
+        "models.RetrieveRequest": {
+            "type": "object",
+            "required": [
+                "kb_ids",
+                "query"
+            ],
+            "properties": {
+                "config": {
+                    "description": "config for retrieval process",
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "damping_factor": {
+                    "description": "damping factor for PageRank (also known as alpha)",
+                    "type": "number",
+                    "maximum": 1,
+                    "minimum": 0
+                },
+                "kb_ids": {
+                    "description": "knowledge base ids to be retrieved",
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
+                "label": {
+                    "description": "label to filter assets",
+                    "type": "string"
+                },
+                "query": {
+                    "description": "query to be retrieved",
+                    "type": "string",
+                    "minLength": 1
+                },
+                "query_weights": {
+                    "description": "relative weight for entities extracted from query by type, order is [named_entities, generic_entities, relations]\nthey will be divided by number of entities in each type",
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "threshold": {
+                    "description": "Threshold for PageRank",
+                    "type": "number",
+                    "maximum": 1,
+                    "minimum": 0
+                },
+                "top_k": {
+                    "description": "Top K for PageRank",
+                    "type": "integer"
+                },
+                "version": {
+                    "description": "version of the knowledge base to retrieve",
+                    "type": "integer"
+                }
+            }
+        },
+        "models.RetrieveResult": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "description": "config",
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "kb_ids": {
+                    "description": "knowledge base ids",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "query": {
+                    "description": "query",
+                    "type": "string"
+                },
+                "retrieve_at": {
+                    "description": "retrieved at",
+                    "type": "string"
+                },
+                "retrieved_assets": {
+                    "description": "retrieved assets",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/assetmanager.RetrievedAsset"
+                    }
+                },
+                "retrieved_count": {
+                    "description": "retrieved count",
+                    "type": "integer"
+                }
+            }
+        }
+    },
+    "externalDocs": {
+        "description": "OpenAPI",
+        "url": "https://swagger.io/resources/open-api/"
+    }
+}

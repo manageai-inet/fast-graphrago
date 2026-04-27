@@ -1,0 +1,526 @@
+basePath: /api/v1
+definitions:
+  assetmanager.AssetRef:
+    properties:
+      asset_id:
+        type: string
+      asset_type:
+        type: string
+      kb_id:
+        type: string
+      ref_type:
+        type: string
+    type: object
+  assetmanager.ContextualAsset:
+    properties:
+      asset_id:
+        type: string
+      asset_type:
+        type: string
+      content:
+        type: string
+      embedding_model:
+        type: string
+      indexed_by:
+        type: string
+      kb_id:
+        type: string
+      labels:
+        items:
+          type: string
+        type: array
+      metadata:
+        additionalProperties: {}
+        type: object
+      refs:
+        items:
+          $ref: '#/definitions/assetmanager.AssetRef'
+        type: array
+      version:
+        type: integer
+    type: object
+  assetmanager.RetrievedAsset:
+    properties:
+      asset_id:
+        type: string
+      asset_type:
+        type: string
+      content:
+        type: string
+      embedding_model:
+        type: string
+      indexed_by:
+        type: string
+      kb_id:
+        type: string
+      labels:
+        items:
+          type: string
+        type: array
+      metadata:
+        additionalProperties: {}
+        type: object
+      refs:
+        items:
+          $ref: '#/definitions/assetmanager.AssetRef'
+        type: array
+      score:
+        type: number
+      version:
+        type: integer
+    type: object
+  models.AssetsResponse:
+    properties:
+      assets:
+        description: assets
+        items:
+          $ref: '#/definitions/assetmanager.ContextualAsset'
+        type: array
+      assets_count:
+        description: assets count
+        type: integer
+      kb_id:
+        description: knowledge base id
+        type: string
+    type: object
+  models.ErrorResponse:
+    properties:
+      failed_field:
+        type: string
+      tag:
+        type: string
+      value:
+        type: string
+    type: object
+  models.IndexingFile:
+    properties:
+      file_content:
+        description: |-
+          file content, if empty, it will download from fileUrl and extract content from it instead
+          each element represents a fragment of given file (however, it will be considered as a page).
+        items:
+          type: string
+        type: array
+      file_name:
+        description: filename to be indexed, including extension
+        example: document.pdf
+        type: string
+      file_type:
+        description: file type to be indexed
+        example: pdf
+        type: string
+      file_url:
+        description: url to download file from, if file content is empty, it will
+          download from this url and extract content from it instead
+        example: https://example.com/document.pdf
+        type: string
+    required:
+    - file_name
+    - file_type
+    type: object
+  models.IndexingRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        description: config to be indexed
+        type: object
+      domain:
+        description: |-
+          domain to be indexed, value should be a single word, phrase, or sentence.
+          it's used to provide context to llm for extracting entities and relations.
+        type: string
+      entity_types:
+        description: |-
+          entity types to be indexed, each element should be a single word (no space or using underscore instead)
+          it's used to provide context to llm for extracting entities and relations.
+        items:
+          type: string
+        type: array
+      file:
+        allOf:
+        - $ref: '#/definitions/models.IndexingFile'
+        description: files to be indexed
+      kb_id:
+        description: knowledge base id to be indexed
+        example: kb_1234567890
+        type: string
+      labels:
+        description: labels to be indexed
+        items:
+          type: string
+        type: array
+      metadata:
+        additionalProperties: {}
+        description: metadata to be indexed
+        type: object
+    required:
+    - file
+    - kb_id
+    type: object
+  models.IndexingResult:
+    properties:
+      assets_count:
+        additionalProperties:
+          type: integer
+        description: assets count by type, key is asset type and value is count
+        type: object
+      embedding_dim:
+        description: embedding dimension
+        type: integer
+      embedding_model:
+        description: embedding model
+        type: string
+      indexed_at:
+        description: indexed at
+        type: string
+      kb_id:
+        description: knowledge base id
+        type: string
+      version:
+        description: version
+        type: integer
+    type: object
+  models.RetrieveRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        description: config for retrieval process
+        type: object
+      damping_factor:
+        description: damping factor for PageRank (also known as alpha)
+        maximum: 1
+        minimum: 0
+        type: number
+      kb_ids:
+        description: knowledge base ids to be retrieved
+        items:
+          minLength: 1
+          type: string
+        type: array
+      label:
+        description: label to filter assets
+        type: string
+      query:
+        description: query to be retrieved
+        minLength: 1
+        type: string
+      query_weights:
+        description: |-
+          relative weight for entities extracted from query by type, order is [named_entities, generic_entities, relations]
+          they will be divided by number of entities in each type
+        items:
+          type: number
+        type: array
+      threshold:
+        description: Threshold for PageRank
+        maximum: 1
+        minimum: 0
+        type: number
+      top_k:
+        description: Top K for PageRank
+        type: integer
+      version:
+        description: version of the knowledge base to retrieve
+        type: integer
+    required:
+    - kb_ids
+    - query
+    type: object
+  models.RetrieveResult:
+    properties:
+      config:
+        additionalProperties: {}
+        description: config
+        type: object
+      kb_ids:
+        description: knowledge base ids
+        items:
+          type: string
+        type: array
+      query:
+        description: query
+        type: string
+      retrieve_at:
+        description: retrieved at
+        type: string
+      retrieved_assets:
+        description: retrieved assets
+        items:
+          $ref: '#/definitions/assetmanager.RetrievedAsset'
+        type: array
+      retrieved_count:
+        description: retrieved count
+        type: integer
+    type: object
+externalDocs:
+  description: OpenAPI
+  url: https://swagger.io/resources/open-api/
+host: localhost:3000
+info:
+  contact:
+    email: manageai@inet.co.th
+    name: ManageAI Team
+  description: This is a simple implementation example of FastGraphRAG API server.
+  license:
+    name: MIT
+  title: FastGraphRAG API
+  version: v1.0.0
+paths:
+  /fastgraph/{kb_id}:
+    delete:
+      consumes:
+      - application/json
+      description: Process deleting kb_id from knowledge base
+      parameters:
+      - description: KbId
+        in: path
+        name: kb_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: integer
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Delete KbId
+      tags:
+      - FastGraph RAG API
+  /fastgraph/assets/{kb_id}:
+    get:
+      consumes:
+      - application/json
+      description: Process getting assets by kb_id from knowledge base
+      parameters:
+      - description: asset type to be retrieved
+        in: path
+        name: asset_type
+        type: string
+      - description: knowledge base id to be retrieved
+        in: path
+        name: kb_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.AssetsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get Assets By KbId
+      tags:
+      - FastGraph RAG API
+  /fastgraph/assets/{kb_id}/{asset_type}:
+    get:
+      consumes:
+      - application/json
+      description: Process getting assets from knowledge base
+      parameters:
+      - description: asset type to be retrieved
+        in: path
+        name: asset_type
+        type: string
+      - description: knowledge base id to be retrieved
+        in: path
+        name: kb_id
+        type: string
+      - collectionFormat: csv
+        description: asset id to be retrieved
+        in: query
+        items:
+          type: string
+        name: assetIds
+        type: array
+      - description: label to filter assets
+        in: query
+        name: label
+        type: string
+      - description: version of the asset to retrieve
+        in: query
+        name: version
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.AssetsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get Assets
+      tags:
+      - FastGraph RAG API
+  /fastgraph/assets/refs/{kb_id}/{asset_type}:
+    get:
+      consumes:
+      - application/json
+      description: Process getting assets by refs from knowledge base
+      parameters:
+      - description: asset type to be retrieved
+        in: path
+        name: asset_type
+        type: string
+      - description: knowledge base id to be retrieved
+        in: path
+        name: kb_id
+        type: string
+      - description: label to filter assets
+        in: query
+        name: label
+        type: string
+      - collectionFormat: csv
+        description: reference ids to be retrieved
+        in: query
+        items:
+          type: string
+        name: refIds
+        type: array
+      - collectionFormat: csv
+        description: reference type to filter assets
+        in: query
+        items:
+          type: string
+        name: refTypes
+        type: array
+      - description: version of the asset to retrieve
+        in: query
+        name: version
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.AssetsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get Assets By Refs
+      tags:
+      - FastGraph RAG API
+  /fastgraph/index:
+    post:
+      consumes:
+      - application/json
+      description: Process indexing a given document bound to specific kb_id, support
+        pdf, docx, md, markdown, txt
+      parameters:
+      - description: Indexing Request
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/models.IndexingRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.IndexingResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Indexing a document
+      tags:
+      - FastGraph RAG API
+  /fastgraph/retrieve:
+    post:
+      consumes:
+      - application/json
+      description: Process retrieving knowledge from knowledge base
+      parameters:
+      - description: Retrieve Request
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/models.RetrieveRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.RetrieveResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Retrieving knowledge from knowledge base
+      tags:
+      - FastGraph RAG API
+  /fastgraph/versions/{kb_id}:
+    get:
+      consumes:
+      - application/json
+      description: Process getting asset versions from knowledge base
+      parameters:
+      - description: asset type to be retrieved
+        in: path
+        name: asset_type
+        type: string
+      - description: knowledge base id to be retrieved
+        in: path
+        name: kb_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: integer
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get Asset Versions
+      tags:
+      - FastGraph RAG API
+swagger: "2.0"
