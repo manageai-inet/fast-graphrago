@@ -17,6 +17,7 @@ import (
 type FastGraphIndexer struct {
 	Rag    rag.GraphRAGService
 	Assets am.AssetStorage
+	Vectors am.VectorStorage
 	am.LoggingCapacity
 }
 
@@ -25,6 +26,7 @@ func New(llm llm.LLM, vecStore am.VectorStorage, assetStore am.AssetStorage, opt
 	return &FastGraphIndexer{
 		Rag:             graphRag,
 		Assets:          assetStore,
+		Vectors:         vecStore,
 		LoggingCapacity: *am.GetDefaultLoggingCapacity(),
 	}, nil
 }
