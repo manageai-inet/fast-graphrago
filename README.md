@@ -68,6 +68,27 @@ if err != nil {
 }
 ```
 
+### Example API Server
+
+For a complete working example, see the [`example/`](./example/) directory, which provides:
+
+- **REST API Server**: Production-ready API with Fiber framework
+- **Document Processing**: Support for PDFs, images, and text files
+- **Elasticsearch Integration**: Vector and asset storage
+- **Interactive Documentation**: Swagger UI at `/docs`
+- **Docker Deployment**: Complete containerized setup
+
+To run the example:
+
+```bash
+cd example
+cp example.env .env  # Configure your settings
+docker-compose up -d  # Start Elasticsearch
+go run main.go        # Start the API server
+```
+
+Visit `http://localhost:3000/docs` for API documentation.
+
 ### Configuring Extraction Options
 
 ```go
