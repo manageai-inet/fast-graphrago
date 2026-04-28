@@ -35,6 +35,26 @@ func (f *FastGraphService) String() string {
 	return "FastGraphService"
 }
 
+func (f *FastGraphService) Extract(
+	ctx context.Context, 
+	sourceFile models.IndexingFile,
+	) ([]am.KnowledgeSource, error) {
+	logger := am.GetLogger(f)
+	logger.InfoContext(ctx, "Extracting content from file", slog.String("filename", sourceFile.FileName), slog.String("fileType", sourceFile.FileType))
+	extractor, ok := f.extractors[sourceFile.FileType]
+	if !ok {
+		msg := fmt.Sprintf("unsupported file type: %s", sourceFile.FileType)
+		logger.ErrorContext(ctx, msg, slog.String("filename", sourceFile.FileName))
+		return nil, errors.New(msg)
+	}
+	if sourceFile.FileUrl == nil {
+		msg := "file url is required for extraction"
+		logger.ErrorContext(ctx, msg, slog.String("filename", sourceFile.FileName))
+		return nil, errors.New(msg)
+	}
+	return extractor.Extract(ctx, "", sourceFile.FileName, *sourceFile.FileUrl, nil)
+}
+
 // config accept: domain string, entity_types []string
 func (f *FastGraphService) Index(
 	ctx context.Context, 

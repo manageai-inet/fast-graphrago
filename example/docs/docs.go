@@ -222,6 +222,52 @@ const docTemplate = `{
                 }
             }
         },
+        "/fastgraph/extract": {
+            "post": {
+                "description": "Process extracting text content from given document, support pdf, docx, md, markdown, txt",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "FastGraph RAG API"
+                ],
+                "summary": "Extracting text content from document",
+                "parameters": [
+                    {
+                        "description": "Text Extraction Request",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.TextExtractionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.TextExtractionResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/fastgraph/index": {
             "post": {
                 "description": "Process indexing a given document bound to specific kb_id, support pdf, docx, md, markdown, txt",
@@ -754,6 +800,39 @@ const docTemplate = `{
                 "retrieved_count": {
                     "description": "retrieved count",
                     "type": "integer"
+                }
+            }
+        },
+        "models.TextExtractionRequest": {
+            "type": "object",
+            "required": [
+                "file"
+            ],
+            "properties": {
+                "file": {
+                    "description": "files to be indexed",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IndexingFile"
+                        }
+                    ]
+                }
+            }
+        },
+        "models.TextExtractionResult": {
+            "type": "object",
+            "properties": {
+                "file_name": {
+                    "description": "filename to be indexed, including extension",
+                    "type": "string"
+                },
+                "file_type": {
+                    "description": "file type to be indexed",
+                    "type": "string"
+                },
+                "text_content": {
+                    "description": "extracted text content, each element represents a fragment of given file (however, it will be considered as a page).",
+                    "type": "string"
                 }
             }
         }

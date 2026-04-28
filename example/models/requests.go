@@ -1,5 +1,10 @@
 package models
 
+type TextExtractionRequest struct {
+	// files to be indexed
+	File      	IndexingFile          `json:"file" validate:"required"`
+}
+
 type IndexingRequest struct {
 	// files to be indexed
 	File      	IndexingFile          `json:"file" validate:"required"`

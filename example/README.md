@@ -48,9 +48,10 @@ Manage and retrieve indexed assets and knowledge base versions.
 ### Prerequisites
 
 - Go 1.25 or higher
-- Elasticsearch 8.x
+- Elasticsearch 8.x (with security enabled by default in Docker Compose setup)
 - LLM API access (ManageAI or OpenAI)
 - OCR service (optional, for PDF/image processing)
+- Docker and Docker Compose (for containerized deployment)
 
 ### 1. Environment Setup
 
@@ -65,6 +66,9 @@ Edit `.env` with your configuration:
 ```env
 # Elasticsearch
 APP_ELASTIC_HOST=http://localhost:9200
+APP_ELASTIC_USER=elastic
+APP_ELASTIC_PASSWORD=changeme
+ELASTIC_PASSWORD=changeme
 
 # LLM Configuration (Choose one)
 # For ManageAI
@@ -87,13 +91,35 @@ OCR_SERVICE_API_KEY=your-ocr-key
 
 ### 2. Start Dependencies
 
-Use Docker Compose to start Elasticsearch:
+Use Docker Compose to start Elasticsearch and Kibana. The setup includes:
+- Elasticsearch with security enabled
+- Automatic Kibana service token generation
+- Persistence volumes for data
 
 ```bash
-docker-compose up -d elasticsearch elasticsearch-ui
+docker compose up -d elasticsearch elasticsearch-ui
 ```
 
-### 3. Run the Server
+The service will wait for Elasticsearch to be healthy and generate the Kibana service token automatically.
+
+If you previously started the stack with different security settings, clean up and recreate:
+
+```bash
+docker compose down -v
+docker compose up -d elasticsearch elasticsearch-ui
+```
+
+### 3. Verify Elasticsearch Connection
+
+Verify Elasticsearch is accessible with your configured credentials:
+
+```bash
+curl -u elastic:changeme http://localhost:9200
+```
+
+You should see the Elasticsearch cluster info.
+
+### 4. Run the Server
 
 ```bash
 go run main.go
@@ -101,22 +127,49 @@ go run main.go
 
 The server will start on `http://localhost:3000`.
 
-### 4. Access API Documentation
+### 5. Access API Documentation
 
 Visit `http://localhost:3000/docs` for interactive Swagger documentation.
 
+### 6. Access Kibana (Optional)
+
+Kibana is available at `http://localhost:5601` for viewing Elasticsearch indices and monitoring. Use credentials:
+- Username: `elastic`
+- Password: `changeme` (or your configured `ELASTIC_PASSWORD`)
+
 ## Docker Deployment
 
-Build and run with Docker Compose:
+Build and run the complete stack with Docker Compose:
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 This will start:
-- Elasticsearch on port 9200
-- Kibana on port 5601
-- FastGraphRAG API server on port 3000
+- **Elasticsearch 8.17.1** on port 9200 (with security enabled)
+- **Kibana 8.17.1** on port 5601 (with auto-generated service token)
+- **FastGraphRAG API server** on port 3000
+
+### Container Services
+
+1. **elasticsearch**: The search and analytics engine with security enabled
+2. **kibana-token-init**: Generates Kibana service token (runs once)
+3. **elasticsearch-ui**: Kibana for cluster monitoring and index management
+4. **fastgraphrago-example**: The REST API server (built from Dockerfile)
+
+### Stopping and Cleaning Up
+
+To stop the services:
+
+```bash
+docker compose down
+```
+
+To remove all data volumes (clean slate):
+
+```bash
+docker compose down -v
+```
 
 ## Usage Examples
 
@@ -159,6 +212,9 @@ curl -X POST http://localhost:3000/api/v1/fastgraph/retrieve \
 | `APP_CHUNK_SIZE` | Text chunk size for processing | 500 |
 | `APP_CHUNK_OVERLAP` | Overlap between text chunks | 50 |
 | `APP_ELASTIC_HOST` | Elasticsearch URL | http://localhost:9200 |
+| `APP_ELASTIC_USER` | Elasticsearch username | elastic |
+| `APP_ELASTIC_PASSWORD` | Elasticsearch password | changeme |
+| `ELASTIC_PASSWORD` | Docker Compose Elasticsearch password (must match `APP_ELASTIC_PASSWORD`) | changeme |
 | `APP_ASSETS_STORAGE_INDEX` | Index for storing assets | fast-graphrago-assets |
 | `APP_VECTOR_STORAGE_INDEX` | Index for storing vectors | fast-graphrago-vectors |
 | `APP_MAX_CONCURRENT` | Max concurrent operations | 1 |
@@ -234,24 +290,49 @@ example/
 ### Common Issues
 
 1. **Elasticsearch Connection Failed**
-   - Ensure Elasticsearch is running on the configured host
+   - Ensure Elasticsearch is running: `docker compose ps`
    - Check network connectivity and authentication settings
+   - Verify credentials in `.env` match docker-compose configuration
+   - Try connecting manually: `curl -u elastic:changeme http://localhost:9200`
 
-2. **LLM API Errors**
+2. **Authentication Error (401 Unauthorized)**
+   - Ensure `APP_ELASTIC_USER` and `APP_ELASTIC_PASSWORD` match Elasticsearch credentials
+   - Verify `ELASTIC_PASSWORD` in `.env` (used by docker-compose)
+   - Make sure credentials haven't changed between restarts
+
+3. **LLM API Errors**
    - Verify API keys and endpoints in `.env`
    - Check rate limits and account permissions
 
-3. **OCR Service Issues**
+4. **OCR Service Issues**
    - Confirm OCR service credentials
    - Check supported file formats
 
-4. **Memory Issues**
+5. **Memory Issues**
    - Adjust `APP_MAX_CONCURRENT` for your system
    - Monitor Elasticsearch resource usage
 
-### Logs
+### Kibana Service Token Issues
 
-Check application logs for detailed error information. Set `APP_LOG_LEVEL=DEBUG` for verbose logging.
+- If Kibana fails to connect, check that `kibana-token-init` service completed successfully
+- View logs: `docker compose logs kibana-token-init`
+- The token file is mounted in a volume at `/token/kibana_service_token`
+
+### Container Logs
+
+View logs from any service:
+
+```bash
+# All services
+docker compose logs -f
+
+# Specific service
+docker compose logs -f elasticsearch
+docker compose logs -f fastgraphrago-example
+docker compose logs -f elasticsearch-ui
+```
+
+For the running application, set `APP_LOG_LEVEL=DEBUG` for verbose logging.
 
 ## Contributing
 
