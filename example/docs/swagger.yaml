@@ -252,6 +252,28 @@ definitions:
         description: retrieved count
         type: integer
     type: object
+  models.TextExtractionRequest:
+    properties:
+      file:
+        allOf:
+        - $ref: '#/definitions/models.IndexingFile'
+        description: files to be indexed
+    required:
+    - file
+    type: object
+  models.TextExtractionResult:
+    properties:
+      file_name:
+        description: filename to be indexed, including extension
+        type: string
+      file_type:
+        description: file type to be indexed
+        type: string
+      text_content:
+        description: extracted text content, each element represents a fragment of
+          given file (however, it will be considered as a page).
+        type: string
+    type: object
 externalDocs:
   description: OpenAPI
   url: https://swagger.io/resources/open-api/
@@ -426,6 +448,37 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
       summary: Get Assets By Refs
+      tags:
+      - FastGraph RAG API
+  /fastgraph/extract:
+    post:
+      consumes:
+      - application/json
+      description: Process extracting text content from given document, support pdf,
+        docx, md, markdown, txt
+      parameters:
+      - description: Text Extraction Request
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/models.TextExtractionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.TextExtractionResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Extracting text content from document
       tags:
       - FastGraph RAG API
   /fastgraph/index:

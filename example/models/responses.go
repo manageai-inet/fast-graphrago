@@ -5,6 +5,15 @@ import (
 	am "github.com/manageai-inet/agentic-assets"
 )
 
+type TextExtractionResult struct {
+	// filename to be indexed, including extension
+	FileName string `json:"file_name"`
+	// file type to be indexed
+	FileType string `json:"file_type"`
+	// extracted text content, each element represents a fragment of given file (however, it will be considered as a page).
+	TextContent string `json:"text_content"`
+}
+
 type IndexingResult struct {
 	// knowledge base id
 	KbId           string          `json:"kb_id"`

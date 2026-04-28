@@ -183,8 +183,7 @@ func InitializeKnowledgeExtractorsFromConfig(cfg *AppConfig) (*map[string]amk.Kn
 	// not need to be the same as actual file extension, 
 	// but it's better to set it to something meaningful for better logging and debugging.
 	extractors := make(map[string]amk.KnowledgeExtractor)
-	loaderToConverterMap := map[amk.KnowledgeLoader]amk.KnowledgeConverter{}
-	
+
 	logger.Info("Initializing Plain Text Knowledge Extractor using default implementation in agentic-assets")
 	// Plain Text Converter using the default implementation in agentic-assets, 
 	// which simply returns the original text content without any processing. 
@@ -195,12 +194,12 @@ func InitializeKnowledgeExtractorsFromConfig(cfg *AppConfig) (*map[string]amk.Kn
 	// Plain Text Loader to load plain text files from HTTP URLs
 	textLoadHttpLoader := amk.NewHttpFileLoader(nil)
 	textLoadHttpLoader.SetLogger(logger)
-	// Register the Plain Text loader and converter in the loaderToConverterMap, so that the Plain Text converter will be applied to plain text files loaded by the Plain Text loader.
-	loaderToConverterMap[textLoadHttpLoader] = textConv
 
 	// As mentioned above, key is used for matching with input FileType, not need to be the same as actual file extension, 
 	// but it's better to set it to something meaningful for better logging and debugging.
-	textExt := amk.NewDocumentExtractor(loaderToConverterMap)
+	textExt := amk.NewDocumentExtractor(map[amk.KnowledgeLoader]amk.KnowledgeConverter{
+		textLoadHttpLoader: textConv,
+	})
 	textExt.SetLogger(logger)
 	for _, ext := range []string{"txt", "text", "md", "csv", "json", "yaml", "yml", "xml", "log", "html"} {
 		extractors[ext] = textExt
@@ -215,8 +214,6 @@ func InitializeKnowledgeExtractorsFromConfig(cfg *AppConfig) (*map[string]amk.Kn
 	// PDF Loader to load PDF files from HTTP URLs
 	pdfLoadHttpLoader := loaders.NewHttpPDFLoader(nil)
 	pdfLoadHttpLoader.SetLogger(logger)
-	// Register the PDF loader and converter in the loaderToConverterMap, so that the PDF converter will be applied to PDF files loaded by the PDF loader.
-	loaderToConverterMap[pdfLoadHttpLoader] = pdfConv
 
 	// Following is an example of how to add another PDF loader that loads PDF files from local file system.
 	// This is just for demonstration purpose, you can choose to implement it or not based on your use case. 
@@ -226,33 +223,13 @@ func InitializeKnowledgeExtractorsFromConfig(cfg *AppConfig) (*map[string]amk.Kn
 	// PDF Loader to load PDF files from local file system
 	// pdfLoadLocalLoader := loaders.NewLocalPDFLoader("./static/path/to/pdf/directory")
 	// pdfLoadLocalLoader.SetLogger(logger)
-	// loaderToConverterMap[pdfLoadLocalLoader] = pdfConv
 
-	pdfExt := amk.NewDocumentExtractor(loaderToConverterMap)
+	pdfExt := amk.NewDocumentExtractor(map[amk.KnowledgeLoader]amk.KnowledgeConverter{
+		pdfLoadHttpLoader: pdfConv,
+		// pdfLoadLocalLoader: pdfConv, // uncomment this if you want to support loading PDF files from local file system
+	})
 	pdfExt.SetLogger(logger)
 	extractors["pdf"] = pdfExt
-
-	// Initialize Image Knowledge Extractor with OCR support
-	logger.Info("Initializing Image Knowledge Extractor with OCR support")
-	// Image Converter using OCR for layout analysis and text extraction
-	// fileType set here is just for logging purpose, it does not affect the actual processing logic in the converter, you can set it to whatever you want.
-	imageConv := mai.NewOcrLayoutApiConverter("image", ocrRepo)
-	imageConv.SetLogger(logger)
-
-	// Image Loader to load image files from HTTP URLs
-	imageLoadHttpLoader := loaders.NewHttpImageLoader(nil)
-	imageLoadHttpLoader.SetLogger(logger)
-	// Register the Image loader and converter in the loaderToConverterMap, so that the Image converter will be applied to image files loaded by the Image loader.
-	loaderToConverterMap[imageLoadHttpLoader] = imageConv
-
-	imageExt := amk.NewDocumentExtractor(loaderToConverterMap)
-	imageExt.SetLogger(logger)
-
-	// As mentioned above, key is used for matching with input FileType, not need to be the same as actual file extension, 
-	// but it's better to set it to something meaningful for better logging and debugging.
-	for _, ext := range loaders.ImageFileExtensions {
-		extractors[ext] = imageExt
-	}
 
 	return &extractors, nil
 }

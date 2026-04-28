@@ -44,6 +44,48 @@ func (h *FastGraphRAGHandler) RegisterRoutes(router fiber.Router) {
 	group.Get("/assets/:kb_id/:asset_type", WrapHandler(h, h.GetAssets))
 	group.Get("/assets/:kb_id", WrapHandler(h, h.GetAssetsByKbId))
 	group.Get("/versions/:kb_id", WrapHandler(h, h.GetVersions))
+	group.Delete("/:kb_id", WrapHandler(h, h.DeleteKbId))
+	group.Post("/extract", WrapHandler(h, h.Extract))
+}
+
+// FastGraphRAG Text Extraction API V1
+//
+//	@Summary		Extracting text content from document
+//	@Description	Process extracting text content from given document, support pdf, docx, md, markdown, txt
+//	@Tags			FastGraph RAG API
+//	@Accept			json
+//	@Produce		json
+//	@Param			data			body		models.TextExtractionRequest	true	"Text Extraction Request"
+//	@Success		200				{object}	models.TextExtractionResult
+//	@Failure		400				{object}	models.ErrorResponse
+//	@Failure		500				{object}	models.ErrorResponse
+//	@Router			/fastgraph/extract [post]
+func (h *FastGraphRAGHandler) Extract(c fiber.Ctx) error {
+	logger := am.GetLogger(h)
+	req := new(models.TextExtractionRequest)
+	if err := c.Bind().Body(req); err != nil {
+		logger.ErrorContext(c, "failed to bind request body", slog.Any("error", err))
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	logger.DebugContext(c, "Accept Request", slog.Any("request", req))
+	sources, err := h.RagSrv.Extract(c, req.File)
+	if err != nil {
+		logger.ErrorContext(c, "failed to extract text", slog.Any("error", err))
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	result := []models.TextExtractionResult{}
+	for _, source := range sources {
+		content := ""
+		if source.SourceContents != nil {
+			content = *source.SourceContents
+		}
+		result = append(result, models.TextExtractionResult{
+			FileName:    source.SourceName,
+			FileType:    source.SourceType,
+			TextContent: content,
+		})
+	}
+	return c.Status(fiber.StatusOK).JSON(result)
 }
 
 // FastGraphRAG Indexing API V1
