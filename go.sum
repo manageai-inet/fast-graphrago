@@ -11,10 +11,8 @@ github.com/google/jsonschema-go v0.4.2/go.mod h1:r5quNTdLOYEz95Ru18zA0ydNbBuYoo9
 github.com/james-bowman/sparse v0.0.0-20260216202247-495ee4f84d35 h1:J3GUCSQ+WW6iscT305u+4Zmq7KXaqm/Wk5h9ZQDtxic=
 github.com/james-bowman/sparse v0.0.0-20260216202247-495ee4f84d35/go.mod h1:sWk/Vt2x04FG4nQrb1BdKP8QXTUFquT0mbtHw8LH+cE=
 github.com/jung-kurt/gofpdf v1.0.3-0.20190309125859-24315acbbda5/go.mod h1:7Id9E/uU8ce6rXgefFLlgrJj/GYY22cpxn+r32jIOes=
-github.com/manageai-inet/agentic-assets v0.0.0-20260427040033-b72c72bb0c0e h1:+c1GRyDGzFK4UNH8RiJSa1cO0M0NnjVX76GQq//jDU4=
-github.com/manageai-inet/agentic-assets v0.0.0-20260427040033-b72c72bb0c0e/go.mod h1:oGadTIcWajPrU1S/nEsHjVTBKtU7pWTvKFIKpI7aM9s=
-github.com/manageai-inet/agentic-assets v0.0.0-20260427103748-3cef0a0108fb h1:7k3IULkTiBNCiJq00MB7dX3XOSxm/tFasnkmte2pWV8=
-github.com/manageai-inet/agentic-assets v0.0.0-20260427103748-3cef0a0108fb/go.mod h1:oGadTIcWajPrU1S/nEsHjVTBKtU7pWTvKFIKpI7aM9s=
+github.com/manageai-inet/agentic-assets v0.1.0 h1:TP+ONqkFpCPsR2sAbVxTRikZPTMgNBHoj619EqUnuF0=
+github.com/manageai-inet/agentic-assets v0.1.0/go.mod h1:oGadTIcWajPrU1S/nEsHjVTBKtU7pWTvKFIKpI7aM9s=
 github.com/openai/openai-go v1.12.0 h1:NBQCnXzqOTv5wsgNC36PrFEiskGfO5wccfCWDo9S1U0=
 github.com/openai/openai-go v1.12.0/go.mod h1:g461MYGXEXBVdV5SaR/5tNzNbSfwTBBefwc+LlDCK0Y=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=

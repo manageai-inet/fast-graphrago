@@ -14,6 +14,6 @@ require (
 require (
 	github.com/google/jsonschema-go v0.4.2
 	github.com/james-bowman/sparse v0.0.0-20260216202247-495ee4f84d35
-	github.com/manageai-inet/agentic-assets v0.0.0-20260427103748-3cef0a0108fb
+	github.com/manageai-inet/agentic-assets v0.1.0
 	github.com/openai/openai-go v1.12.0
 )

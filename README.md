@@ -1,5 +1,8 @@
 # Fast-GraphRAG Go Implementation
 
+[![GitHub release](https://img.shields.io/github/v/release/manageai-inet/fast-graphrago?label=version)](https://github.com/manageai-inet/fast-graphrago/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/manageai-inet/fast-graphrago.svg)](https://pkg.go.dev/github.com/manageai-inet/fast-graphrago)
+
 A Go implementation of **FastGraphRAG**, a scalable framework for knowledge graph construction and retrieval-augmented generation (RAG).
 
 ## Overview
