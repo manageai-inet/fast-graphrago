@@ -13,6 +13,8 @@ import (
 type GraphRAGServiceCompileTimeOptions struct {
 	// (Engine Config) Max concurrent for processing (e.g. chunking, extraction, and embedding)
 	MaxConcurrent int `json:"max_concurrent"`
+	// (Engine Config) Batch size for graph extraction (chunks per LLM call)
+	BatchSize int `json:"batch_size"`
 	// (Engine Config) LLM for entities and relations extraction, should support tool calling
 	LLM llm.LLM
 	// (Engine Config) Chunk Extractor
@@ -57,6 +59,7 @@ func NewGraphRAGServiceOptions() *GraphRAGServiceOptions {
 	return &GraphRAGServiceOptions{
 		GraphRAGServiceCompileTimeOptions: GraphRAGServiceCompileTimeOptions{
 			MaxConcurrent: utils.DefaultMaxConcurrent,
+			BatchSize:     utils.DefaultBatchSize,
 		},
 		GraphRAGServiceRuntimeOptions: GraphRAGServiceRuntimeOptions{
 			Domain:        utils.DefaultDomain,
@@ -142,6 +145,13 @@ type Option func(*GraphRAGServiceOptions)
 func WithMaxConcurrent(maxConcurrent int) Option {
 	return func(opts *GraphRAGServiceOptions) {
 		opts.MaxConcurrent = maxConcurrent
+	}
+}
+
+func WithBatchSize(batchSize int) Option {
+	return func(opts *GraphRAGServiceOptions) {
+		opts.BatchSize = batchSize
+		opts.GraphExtractor.SetBatchSize(batchSize)
 	}
 }
 
