@@ -8,9 +8,10 @@ import (
 )
 
 type GraphEntity struct {
-	Name string `json:"name" jsonschema:"The name of the entity"`
-	Type string `json:"type" jsonschema:"The type of the entity"`
-	Desc string `json:"desc" jsonschema:"The description for the entity context"`
+	Name       string `json:"name"        jsonschema:"The name of the entity"`
+	Type       string `json:"type"        jsonschema:"The type of the entity"`
+	Desc       string `json:"desc"        jsonschema:"The description for the entity context"`
+	ChunkIndex int    `json:"chunk_index" jsonschema:"Zero-based index of the source chunk in the input batch"`
 }
 
 type RelativeEntity struct {
@@ -19,9 +20,10 @@ type RelativeEntity struct {
 }
 
 type GraphRelation struct {
-	Source RelativeEntity `json:"source" jsonschema:"The source of the relation"`
-	Target RelativeEntity `json:"target" jsonschema:"The target of the relation"`
-	Desc   string `json:"desc" jsonschema:"The description for the relation context"`
+	Source     RelativeEntity `json:"source"      jsonschema:"The source of the relation"`
+	Target     RelativeEntity `json:"target"      jsonschema:"The target of the relation"`
+	Desc       string         `json:"desc"        jsonschema:"The description for the relation context"`
+	ChunkIndex int            `json:"chunk_index" jsonschema:"Zero-based index of the source chunk in the input batch"`
 }
 
 type ExtractedGraph struct {
