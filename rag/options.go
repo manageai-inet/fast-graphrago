@@ -188,6 +188,18 @@ func WithGraphExtractor(graphExtractor graph.GraphExtractor) Option {
 	}
 }
 
+func WithEmbedder(embedder asset_manager.Embedder) Option {
+	return func(opts *GraphRAGServiceOptions) {
+		opts.Embedder = embedder
+	}
+}
+
+func WithEmbedBatchSize(embedBatchSize int) Option {
+	return func(opts *GraphRAGServiceOptions) {
+		opts.EmbedBatchSize = embedBatchSize
+	}
+}
+
 func WithDomain(domain string, entityTypes []string) Option {
 	return func(opts *GraphRAGServiceOptions) {
 		opts.Domain = domain
@@ -271,17 +283,5 @@ func WithVersion(version *int) Option {
 func WithLabel(label *string) Option {
 	return func(opts *GraphRAGServiceOptions) {
 		opts.Label = label
-	}
-}
-
-func WithEmbedder(embedder asset_manager.Embedder) Option {
-	return func(opts *GraphRAGServiceOptions) {
-		opts.Embedder = embedder
-	}
-}
-
-func WithEmbedBatchSize(size int) Option {
-	return func(opts *GraphRAGServiceOptions) {
-		opts.EmbedBatchSize = size
 	}
 }
