@@ -23,7 +23,7 @@ func NewGraphExtractionOptions() GraphExtractionOptions {
 
 type GraphExtractor interface {
 	SetLLM(llm llm.LLM)
-	// return map of chunk id to extracted graph
+	SetBatchSize(batchSize int)
 	ExtractGraph(ctx context.Context, chunks []asset_manager.ContextualAsset, options GraphExtractionOptions) (models.GraphAssets, error)
 	ExtractGraphFromChunk(ctx context.Context, chunk asset_manager.ContextualAsset, options GraphExtractionOptions) (models.GraphAssets, error)
 	ExtractEntitiesFromQuery(ctx context.Context, query string) (models.ExtractedQuery, error)

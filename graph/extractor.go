@@ -19,23 +19,47 @@ import (
 )
 
 type FastGraphExtractor struct {
-	LLM             llm.LLM
-	MaxRetryAttempt int
-	MaxConcurrent   int
+	LLM               llm.LLM
+	MaxRetryAttempt   int
+	MaxConcurrent     int
+	BatchSize         int
+	extractionTool    openai.ChatCompletionToolParam
+	deduplicationTool openai.ChatCompletionToolParam
+	queryTool         openai.ChatCompletionToolParam
 	asset_manager.LoggingCapacity
 }
 
 func NewFastGraphExtractor(llm llm.LLM) *FastGraphExtractor {
+	extractionTool, err := models.GetGraphExtractionTool()
+	if err != nil {
+		panic("failed to build extraction tool schema: " + err.Error())
+	}
+	deduplicationTool, err := models.GetRelationClusterTool()
+	if err != nil {
+		panic("failed to build deduplication tool schema: " + err.Error())
+	}
+	queryTool, err := models.GetQueryExtractionTool()
+	if err != nil {
+		panic("failed to build query tool schema: " + err.Error())
+	}
 	return &FastGraphExtractor{
-		LLM: llm, 
-		MaxRetryAttempt: utils.DefaultMaxRetryAttempt, 
-		MaxConcurrent: utils.DefaultMaxConcurrent, 
-		LoggingCapacity: *asset_manager.GetDefaultLoggingCapacity(),
+		LLM:               llm,
+		MaxRetryAttempt:   utils.DefaultMaxRetryAttempt,
+		MaxConcurrent:     utils.DefaultMaxConcurrent,
+		BatchSize:         utils.DefaultBatchSize,
+		extractionTool:    extractionTool,
+		deduplicationTool: deduplicationTool,
+		queryTool:         queryTool,
+		LoggingCapacity:   *asset_manager.GetDefaultLoggingCapacity(),
 	}
 }
 
 func (f *FastGraphExtractor) SetLLM(llm llm.LLM) {
 	f.LLM = llm
+}
+
+func (f *FastGraphExtractor) SetBatchSize(batchSize int) {
+	f.BatchSize = batchSize
 }
 
 // Extract Graph From given batch of chunks, including deduplication and merge processes for entities and relations
