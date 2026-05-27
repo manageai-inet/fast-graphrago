@@ -52,7 +52,7 @@ type AppConfig struct {
 	// Maximum number of concurrent operations for RAG
 	MaxConcurrent int `envconfig:"max_concurrent" default:"1"`
 	// Batch size for embedding (entities per EmbedBatch API call)
-	EmbedBatchSize int `envconfig:"embed_batch_size" default:"50"`
+	EmbedBatchSize int `envconfig:"embed_batch_size" default:"32"`
 	// LLM HTTP timeout in seconds (default 5 minutes to support large batch extraction)
 	LLMTimeoutSeconds int `envconfig:"llm_timeout_seconds" default:"300"`
 
