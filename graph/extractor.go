@@ -284,78 +284,84 @@ func (f *FastGraphExtractor) DeduplicateRelations(ctx context.Context, relations
 	return newRelations, nil
 }
 
-func (f *FastGraphExtractor) ExtractGraphFromChunk(ctx context.Context, chunk asset_manager.ContextualAsset, options GraphExtractionOptions) (models.GraphAssets, error) {
-	graphExtractionTool, err := models.GetGraphExtractionTool()
-	if err != nil {
-		return models.GraphAssets{}, err
+func (f *FastGraphExtractor) ExtractGraphFromChunks(ctx context.Context, chunks []asset_manager.ContextualAsset, options GraphExtractionOptions) (models.GraphAssets, error) {
+	var sb strings.Builder
+	for i, ch := range chunks {
+		fmt.Fprintf(&sb, "[chunk_%d]\n%s\n\n", i, ch.Content)
 	}
+	chunksContent := strings.TrimRight(sb.String(), "\n")
+
 	systemPrompt := fmt.Sprintf(prompts.EntityRelationshipExtractionSystem, options.Domain)
 	entityTypes := strings.Join(options.EntityTypes, ", ")
-	graphExtractionPrompt := fmt.Sprintf(prompts.EntityRelationshipExtractionPrompt, entityTypes, chunk.Content)
+	extractionPrompt := fmt.Sprintf(prompts.EntityRelationshipExtractionPrompt, entityTypes, len(chunks), chunksContent)
 
 	messages := []openai.ChatCompletionMessage{
-		{
-			Role:    "system",
-			Content: systemPrompt,
-		},
-		{
-			Role:    "user",
-			Content: graphExtractionPrompt,
-		},
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: extractionPrompt},
 	}
-	toolChoice := openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openai.String("required"),}
-	generation, err := f.LLM.Generate(ctx, messages, []openai.ChatCompletionToolParam{graphExtractionTool}, &toolChoice)
+	toolChoice := openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openai.String("required")}
+
+	generation, err := f.LLM.Generate(ctx, messages, []openai.ChatCompletionToolParam{f.extractionTool}, &toolChoice)
 	if err != nil {
 		return models.GraphAssets{}, err
 	}
 	if len(generation.ToolCalls) == 0 {
 		return models.GraphAssets{}, fmt.Errorf("no tool calls found")
 	}
-	args := generation.ToolCalls[0].Function.Arguments
-	graph, err := utils.HandleToolCall[models.ExtractedGraph](args)
+
+	graph, err := utils.HandleToolCall[models.ExtractedGraph](generation.ToolCalls[0].Function.Arguments)
 	if err != nil {
 		return models.GraphAssets{}, err
 	}
+
 	entityKeyToId := make(map[string]string)
-	entityAssets := []models.EntityAsset{}
-	relationAssets := []models.RelationAsset{}
+	entityAssets := make([]models.EntityAsset, 0, len(graph.Entities))
+	relationAssets := make([]models.RelationAsset, 0, len(graph.Relations))
+
 	for _, entity := range graph.Entities {
 		entity.Name = utils.NormalizeName(entity.Name)
 		entity.Type = utils.NormalizeName(entity.Type)
-		entityAssets = append(
-			entityAssets,
-			models.EntityAsset{
-				Name:        entity.Name,
-				Type:        entity.Type,
-				Description: entity.Desc,
-				ChunkIds:    []string{chunk.AssetId},
-			})
+		if entity.ChunkIndex < 0 || entity.ChunkIndex >= len(chunks) {
+			return models.GraphAssets{}, fmt.Errorf("entity %q has invalid chunk_index %d (batch size %d)", entity.Name, entity.ChunkIndex, len(chunks))
+		}
+		entityAssets = append(entityAssets, models.EntityAsset{
+			Name:        entity.Name,
+			Type:        entity.Type,
+			Description: entity.Desc,
+			ChunkIds:    []string{chunks[entity.ChunkIndex].AssetId},
+		})
 		entityKeyToId[entity.Name+"|"+entity.Type] = entity.Name
 	}
+
 	for _, relation := range graph.Relations {
 		relation.Source.Name = utils.NormalizeName(relation.Source.Name)
 		relation.Source.Type = utils.NormalizeName(relation.Source.Type)
 		relation.Target.Name = utils.NormalizeName(relation.Target.Name)
 		relation.Target.Type = utils.NormalizeName(relation.Target.Type)
-		relationAssets = append(
-			relationAssets,
-			models.RelationAsset{
-				Source:      relation.Source.Name,
-				SourceType:  relation.Source.Type,
-				Target:      relation.Target.Name,
-				TargetType:  relation.Target.Type,
-				Description: relation.Desc,
-				ChunkIds:    []string{chunk.AssetId},
-			})
+		if relation.ChunkIndex < 0 || relation.ChunkIndex >= len(chunks) {
+			return models.GraphAssets{}, fmt.Errorf("relation %q→%q has invalid chunk_index %d (batch size %d)", relation.Source.Name, relation.Target.Name, relation.ChunkIndex, len(chunks))
+		}
 		if _, ok := entityKeyToId[relation.Source.Name+"|"+relation.Source.Type]; !ok {
-			return models.GraphAssets{}, fmt.Errorf("relation source entity %s not found", relation.Source.Name)
+			return models.GraphAssets{}, fmt.Errorf("relation source entity %q not found", relation.Source.Name)
 		}
 		if _, ok := entityKeyToId[relation.Target.Name+"|"+relation.Target.Type]; !ok {
-			return models.GraphAssets{}, fmt.Errorf("relation target entity %s not found", relation.Target.Name)
+			return models.GraphAssets{}, fmt.Errorf("relation target entity %q not found", relation.Target.Name)
 		}
+		relationAssets = append(relationAssets, models.RelationAsset{
+			Source:      relation.Source.Name,
+			SourceType:  relation.Source.Type,
+			Target:      relation.Target.Name,
+			TargetType:  relation.Target.Type,
+			Description: relation.Desc,
+			ChunkIds:    []string{chunks[relation.ChunkIndex].AssetId},
+		})
 	}
 
 	return models.GraphAssets{EntityAssets: entityAssets, RelationAssets: relationAssets}, nil
+}
+
+func (f *FastGraphExtractor) ExtractGraphFromChunk(ctx context.Context, chunk asset_manager.ContextualAsset, options GraphExtractionOptions) (models.GraphAssets, error) {
+	return f.ExtractGraphFromChunks(ctx, []asset_manager.ContextualAsset{chunk}, options)
 }
 
 func (f *FastGraphExtractor) ExtractEntitiesFromQuery(ctx context.Context, query string) (models.ExtractedQuery, error) {
