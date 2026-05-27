@@ -122,12 +122,12 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 		if source.SourceName == "" {
 			msg := fmt.Sprintf("page source of kbId %s at position %d has empty source name", kbId, i)
 			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, fmt.Errorf(msg)
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
 		}
 		if source.SourceContents == nil || *source.SourceContents == "" {
 			msg := fmt.Sprintf("page source name %s of kbId %s at position %d has empty source contents", source.SourceName, kbId, i)
 			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, fmt.Errorf(msg)
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
 		}
 		pageId := fmt.Sprintf("%s:%s:%d", kbId, filename, i)
 		pages = append(pages, ImmediatePage{
@@ -180,7 +180,7 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 		if pageNumber >= len(pageAssets) {
 			msg := fmt.Sprintf("page asset not found for page number %d (page assets length: %d)", pageNumber, len(pageAssets))
 			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, fmt.Errorf(msg)
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
 		}
 		page := pageAssets[pageNumber]
 		refs := []asset_manager.AssetRef{
