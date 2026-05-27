@@ -15,6 +15,7 @@ import (
 	"github.com/manageai-inet/fast-graphrago/graph"
 	"github.com/manageai-inet/fast-graphrago/llm"
 	"github.com/manageai-inet/fast-graphrago/models"
+	"github.com/manageai-inet/fast-graphrago/utils"
 
 	"github.com/james-bowman/sparse"
 
@@ -78,11 +79,10 @@ func NewGraphRAGService(
 }
 
 // batchEmbed embeds entities in batches using EmbedBatch, returning one VectorAsset per entity.
-// Batches are processed sequentially in order; maxConcurrent is reserved for future use.
-// Results are ordered to match entities.
-func batchEmbed(ctx context.Context, entities []asset_manager.ContextualAsset, embedder asset_manager.Embedder, batchSize, maxConcurrent int) ([]asset_manager.VectorAsset, error) {
+// Batches are processed sequentially; results are ordered to match entities.
+func batchEmbed(ctx context.Context, entities []asset_manager.ContextualAsset, embedder asset_manager.Embedder, batchSize int) ([]asset_manager.VectorAsset, error) {
 	if batchSize <= 0 {
-		batchSize = 50
+		batchSize = utils.DefaultEmbedBatchSize
 	}
 	n := len(entities)
 	numBatches := (n + batchSize - 1) / batchSize
@@ -386,7 +386,7 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 	var vectorAssets []asset_manager.VectorAsset
 	if g.Embedder != nil {
 		var embedErr error
-		vectorAssets, embedErr = batchEmbed(ctx, entityAssets, g.Embedder, g.EmbedBatchSize, g.MaxConcurrent)
+		vectorAssets, embedErr = batchEmbed(ctx, entityAssets, g.Embedder, g.EmbedBatchSize)
 		if embedErr != nil {
 			logger.ErrorContext(ctx, embedErr.Error(), slog.String("kbId", kbId))
 			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, embedErr

@@ -73,7 +73,7 @@ func TestBatchEmbed_BatchCount(t *testing.T) {
 	entities := makeTestEntities(5)
 	emb := &mockEmbedder{model: "test-model", dim: 3}
 
-	vecs, err := batchEmbed(context.Background(), entities, emb, 2, 4)
+	vecs, err := batchEmbed(context.Background(), entities, emb, 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestBatchEmbed_VectorAssetFields(t *testing.T) {
 	entities[0].Content = "ENTITY | type | description"
 	emb := &mockEmbedder{model: "my-model", dim: 3}
 
-	vecs, err := batchEmbed(context.Background(), entities, emb, 50, 1)
+	vecs, err := batchEmbed(context.Background(), entities, emb, 50)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestBatchEmbed_PartialLastBatch(t *testing.T) {
 	entities := makeTestEntities(7)
 	emb := &mockEmbedder{model: "test-model", dim: 2}
 
-	vecs, err := batchEmbed(context.Background(), entities, emb, 3, 4)
+	vecs, err := batchEmbed(context.Background(), entities, emb, 3)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestBatchEmbed_EmbedBatchError(t *testing.T) {
 	expectedErr := errors.New("embed API unavailable")
 	emb := &mockEmbedderWithError{model: "test-model", dim: 3, err: expectedErr}
 
-	vecs, err := batchEmbed(context.Background(), entities, emb, 50, 1)
+	vecs, err := batchEmbed(context.Background(), entities, emb, 50)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
