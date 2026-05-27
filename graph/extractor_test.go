@@ -3,6 +3,8 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/manageai-inet/fast-graphrago/models"
@@ -15,8 +17,9 @@ import (
 
 // mockLLM replays pre-set responses in order.
 type mockLLM struct {
-	responses []openai.ChatCompletionMessage
-	callCount int
+	responses   []openai.ChatCompletionMessage
+	callCount   int
+	errToReturn error
 }
 
 func (m *mockLLM) Generate(
@@ -25,6 +28,12 @@ func (m *mockLLM) Generate(
 	_ []openai.ChatCompletionToolParam,
 	_ *openai.ChatCompletionToolChoiceOptionUnionParam,
 ) (*openai.ChatCompletionMessage, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	if m.callCount >= len(m.responses) {
+		return nil, fmt.Errorf("mockLLM: unexpected call %d (only %d responses configured)", m.callCount, len(m.responses))
+	}
 	resp := m.responses[m.callCount]
 	m.callCount++
 	return &resp, nil
@@ -107,10 +116,28 @@ func TestExtractGraphFromChunks_MapChunkIndex(t *testing.T) {
 	}
 
 	// Check relation ChunkIds
+	relationChunkIds := map[string]string{}
 	for _, ra := range result.RelationAssets {
 		if len(ra.ChunkIds) != 1 {
 			t.Errorf("relation %s→%s: expected 1 ChunkId, got %d", ra.Source, ra.Target, len(ra.ChunkIds))
+		} else {
+			key := ra.Source + "→" + ra.Target
+			relationChunkIds[key] = ra.ChunkIds[0]
 		}
+	}
+	if relationChunkIds["alice→acme"] != "kb:file.txt:chunk-0" {
+		t.Errorf("alice→acme ChunkId = %q, want kb:file.txt:chunk-0", relationChunkIds["alice→acme"])
+	}
+	if relationChunkIds["bob→globex"] != "kb:file.txt:chunk-1" {
+		t.Errorf("bob→globex ChunkId = %q, want kb:file.txt:chunk-1", relationChunkIds["bob→globex"])
+	}
+
+	// Check ChunkIds for organization entities
+	if entityChunkIds["acme"] != "kb:file.txt:chunk-0" {
+		t.Errorf("acme ChunkId = %q, want kb:file.txt:chunk-0", entityChunkIds["acme"])
+	}
+	if entityChunkIds["globex"] != "kb:file.txt:chunk-1" {
+		t.Errorf("globex ChunkId = %q, want kb:file.txt:chunk-1", entityChunkIds["globex"])
 	}
 }
 
@@ -133,5 +160,44 @@ func TestExtractGraphFromChunks_InvalidChunkIndex(t *testing.T) {
 	_, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
 	if err == nil {
 		t.Fatal("expected error for out-of-range chunk_index, got nil")
+	}
+}
+
+// TestExtractGraphFromChunks_NegativeChunkIndex verifies a negative chunk_index causes an error.
+func TestExtractGraphFromChunks_NegativeChunkIndex(t *testing.T) {
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "kb:file.txt:chunk-0", Content: "Alice works at Acme."},
+	}
+	llmResp := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "an employee", ChunkIndex: -1},
+		},
+		Relations: []models.GraphRelation{},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{llmResp})
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person"}}
+
+	_, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
+	if err == nil {
+		t.Fatal("expected error for negative chunk_index, got nil")
+	}
+}
+
+// TestExtractGraphFromChunks_LLMError verifies that LLM errors propagate correctly.
+func TestExtractGraphFromChunks_LLMError(t *testing.T) {
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "kb:file.txt:chunk-0", Content: "Alice works at Acme."},
+	}
+
+	e := NewFastGraphExtractor(&mockLLM{errToReturn: errors.New("rate limit exceeded")})
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person"}}
+
+	_, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
+	if err == nil {
+		t.Fatal("expected error from LLM, got nil")
+	}
+	if err.Error() != "rate limit exceeded" {
+		t.Errorf("error = %q, want %q", err.Error(), "rate limit exceeded")
 	}
 }
