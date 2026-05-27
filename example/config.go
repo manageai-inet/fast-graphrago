@@ -51,6 +51,8 @@ type AppConfig struct {
 
 	// Maximum number of concurrent operations for RAG
 	MaxConcurrent int `envconfig:"max_concurrent" default:"1"`
+	// Batch size for embedding (entities per EmbedBatch API call)
+	EmbedBatchSize int `envconfig:"embed_batch_size" default:"50"`
 	// LLM HTTP timeout in seconds (default 5 minutes to support large batch extraction)
 	LLMTimeoutSeconds int `envconfig:"llm_timeout_seconds" default:"300"`
 
@@ -165,6 +167,8 @@ func InitializeFastGraphIndexerFromConfig(cfg *AppConfig) (*fastgraphrag.FastGra
 	opts = append(opts, rag.WithMaxConcurrent(cfg.MaxConcurrent))
 	opts = append(opts, rag.WithChunkingExtractor(chunkExt))
 	opts = append(opts, rag.WithGraphExtractor(graphExt))
+	opts = append(opts, rag.WithEmbedder(embedder))
+	opts = append(opts, rag.WithEmbedBatchSize(cfg.EmbedBatchSize))
 	opts = append(opts, rag.WithLLM(chatModel))
 	// Initialize the FastGraphRAG Indexer with the chat model, vector store, and asset store.
 	fgIndexer, err := fastgraphrag.New(chatModel, vectorStore, assetStore, opts...)
