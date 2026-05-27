@@ -35,7 +35,7 @@ const DefaultChunkSize = 500
 const DefaultChunkOverlap = 50
 
 const DefaultMaxRetryAttempt = 1
-const DefaultMaxConcurrent = 3
+const DefaultMaxConcurrent = 5
 const DefaultBatchSize = 5
 const DefaultMaxWalks = 100
 const DefaultDampingFactor = 0.5

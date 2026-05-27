@@ -12,6 +12,7 @@ Your goal is to highlight information that is relevant to the domain and the que
 3. **ENTITY COVERAGE CHECK**: Verify that every identified entity is part of at least one relationship. If any entity is isolated, infer and add a relationship to connect it to the graph, even if the relationship is implicit.
 4. **OUTPUT FORMAT: STRICTLY VALID JSON**: Output MUST be in strictly valid JSON format.  Adhere to ALL standard JSON rules. The JSON MUST contain two top-level lists: "entities", "relationships". Each list item must be a JSON object with the REQUIRED fields ("name", "type", "desc" for entities; "source", "target", "desc" for relationships), all as JSON strings enclosed in DOUBLE QUOTES ONLY.  **ABSOLUTELY NO SINGLE QUOTES, BRACKETS FOR STRINGS, TRAILING COMMAS, OR MARKDOWN FORMATTING (like triple backticks) ARE PERMITTED.**  Invalid JSON output is unacceptable.
 5. **CHUNK ATTRIBUTION**: For each extracted entity and relation, set the ` + "`chunk_index`" + ` field to the zero-based index of the chunk it was extracted from (matching the ` + "`[chunk_N]`" + ` labels in the input). For a single-chunk input the value is always 0.
+6. **ENTITY COMPLETENESS**: Every entity referenced as source or target in a relationship MUST be explicitly declared in the entities list with its name, type, and description. Never reference an entity in a relationship that is not in your entities list.
 
 # EXAMPLE INPUT DATA
 Domain:

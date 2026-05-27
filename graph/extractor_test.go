@@ -286,6 +286,88 @@ func TestExtractGraph_BatchesChunks(t *testing.T) {
 	}
 }
 
+// TestExtractGraphFromChunks_InfersUndeclaredEntity verifies that when the LLM returns a
+// relation referencing an entity not in the entities list, the entity is auto-created
+// using context extracted from the source chunk, and the relation is preserved.
+func TestExtractGraphFromChunks_InfersUndeclaredEntity(t *testing.T) {
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "kb:file.txt:chunk-0", Content: "Alice works at Acme. Acme is a company founded in 1990."},
+	}
+
+	// LLM forgot to declare "Acme" in entities but referenced it in a relation
+	llmResp := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "an employee", ChunkIndex: 0},
+		},
+		Relations: []models.GraphRelation{
+			{
+				Source:     models.RelativeEntity{Name: "Alice", Type: "person"},
+				Target:     models.RelativeEntity{Name: "Acme", Type: "organization"},
+				Desc:       "works at",
+				ChunkIndex: 0,
+			},
+		},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{llmResp})
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person", "organization"}}
+
+	result, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// relation must be preserved
+	if len(result.RelationAssets) != 1 {
+		t.Fatalf("expected 1 relation, got %d", len(result.RelationAssets))
+	}
+	if result.RelationAssets[0].Target != "acme" {
+		t.Errorf("relation target = %q, want acme", result.RelationAssets[0].Target)
+	}
+
+	// inferred entity must exist with correct ChunkId
+	entityMap := map[string]models.EntityAsset{}
+	for _, ea := range result.EntityAssets {
+		entityMap[ea.Name] = ea
+	}
+	acme, ok := entityMap["acme"]
+	if !ok {
+		t.Fatal("expected inferred entity 'acme', not found")
+	}
+	if acme.ChunkIds[0] != "kb:file.txt:chunk-0" {
+		t.Errorf("acme ChunkId = %q, want kb:file.txt:chunk-0", acme.ChunkIds[0])
+	}
+	// description should be extracted from chunk content (contains "Acme")
+	if acme.Description == "" {
+		t.Errorf("expected non-empty description for inferred entity 'acme', got empty")
+	}
+}
+
+// TestExtractEntityContext verifies the rune-safe context extraction helper.
+func TestExtractEntityContext(t *testing.T) {
+	cases := []struct {
+		name        string
+		content     string
+		entity      string
+		wantFound   bool
+	}{
+		{"ascii match", "Alice works at Acme corp.", "acme", true},
+		{"thai match", "พนักงานมีสิทธิ์ลา การลาพักผ่อนประจำปี ไม่เกิน 10 วัน", "การลาพักผ่อนประจำปี", true},
+		{"no match", "Alice works at Acme.", "globex", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractEntityContext(tc.content, tc.entity)
+			if tc.wantFound && got == "" {
+				t.Errorf("expected non-empty context for entity %q in %q", tc.entity, tc.content)
+			}
+			if !tc.wantFound && got != "" {
+				t.Errorf("expected empty context for entity %q, got %q", tc.entity, got)
+			}
+		})
+	}
+}
+
 // TestExtractGraph_EmptyChunks verifies ExtractGraph handles an empty input without error.
 func TestExtractGraph_EmptyChunks(t *testing.T) {
 	e := newTestExtractor(nil)

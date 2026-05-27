@@ -292,7 +292,39 @@ func (f *FastGraphExtractor) DeduplicateRelations(ctx context.Context, relations
 	return newRelations, nil
 }
 
+// extractEntityContext searches for entityName in chunkContent and returns a
+// surrounding text window as a best-effort description. Returns "" if not found.
+// Uses rune-safe slicing so multi-byte characters (e.g. Thai) are never split.
+func extractEntityContext(chunkContent, entityName string) string {
+	byteIdx := strings.Index(strings.ToLower(chunkContent), entityName)
+	if byteIdx < 0 {
+		return ""
+	}
+	runes := []rune(chunkContent)
+	runeIdx := len([]rune(chunkContent[:byteIdx]))
+	entityRuneLen := len([]rune(entityName))
+	const window = 80
+	start := max(0, runeIdx-window)
+	end := min(len(runes), runeIdx+entityRuneLen+window)
+	return strings.TrimSpace(string(runes[start:end]))
+}
+
+func (f *FastGraphExtractor) inferMissingEntity(ctx context.Context, logger interface{ WarnContext(context.Context, string, ...any) }, name, typ string, chunkIdx int, chunks []asset_manager.ContextualAsset) models.EntityAsset {
+	desc := extractEntityContext(chunks[chunkIdx].Content, name)
+	logger.WarnContext(ctx, "relation references undeclared entity, inferring from chunk",
+		slog.String("entity", name),
+		slog.String("type", typ),
+		slog.Bool("desc_found", desc != ""))
+	return models.EntityAsset{
+		Name:        name,
+		Type:        typ,
+		Description: desc,
+		ChunkIds:    []string{chunks[chunkIdx].AssetId},
+	}
+}
+
 func (f *FastGraphExtractor) ExtractGraphFromChunks(ctx context.Context, chunks []asset_manager.ContextualAsset, options GraphExtractionOptions) (models.GraphAssets, error) {
+	logger := asset_manager.GetLogger(f)
 	var sb strings.Builder
 	for i, ch := range chunks {
 		fmt.Fprintf(&sb, "[chunk_%d]\n%s\n\n", i, ch.Content)
@@ -350,10 +382,14 @@ func (f *FastGraphExtractor) ExtractGraphFromChunks(ctx context.Context, chunks 
 			return models.GraphAssets{}, fmt.Errorf("relation %q→%q has invalid chunk_index %d (batch size %d)", relation.Source.Name, relation.Target.Name, relation.ChunkIndex, len(chunks))
 		}
 		if _, ok := entityKeyToId[relation.Source.Name+"|"+relation.Source.Type]; !ok {
-			return models.GraphAssets{}, fmt.Errorf("relation source entity %q not found", relation.Source.Name)
+			inferred := f.inferMissingEntity(ctx, logger, relation.Source.Name, relation.Source.Type, relation.ChunkIndex, chunks)
+			entityAssets = append(entityAssets, inferred)
+			entityKeyToId[inferred.Name+"|"+inferred.Type] = inferred.Name
 		}
 		if _, ok := entityKeyToId[relation.Target.Name+"|"+relation.Target.Type]; !ok {
-			return models.GraphAssets{}, fmt.Errorf("relation target entity %q not found", relation.Target.Name)
+			inferred := f.inferMissingEntity(ctx, logger, relation.Target.Name, relation.Target.Type, relation.ChunkIndex, chunks)
+			entityAssets = append(entityAssets, inferred)
+			entityKeyToId[inferred.Name+"|"+inferred.Type] = inferred.Name
 		}
 		relationAssets = append(relationAssets, models.RelationAsset{
 			Source:      relation.Source.Name,
