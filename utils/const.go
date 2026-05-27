@@ -26,21 +26,22 @@ var DefaultEntityTypes = []string{
 	"resource",      // Assets, materials, tools, funding
 	"outcome",       // Results, consequences, achievements, impacts
 	// for, components within document, they will use for mapping to asset with the same type. (these kind of asset will not be indexed.)
-	"table",         // Tables
-	"image",         // Images
-	"form",          // Forms
+	"table", // Tables
+	"image", // Images
+	"form",  // Forms
 }
 
 const DefaultChunkSize = 500
 const DefaultChunkOverlap = 50
 
 const DefaultMaxRetryAttempt = 1
-const DefaultMaxConcurrent   = 3
-const DefaultBatchSize        = 5
-const DefaultMaxWalks         = 100
-const DefaultDampingFactor    = 0.5
-const DefaultTopK             = 50
-const DefaultThreshold        = float32(0.3)
+const DefaultMaxConcurrent = 3
+const DefaultBatchSize = 5
+const DefaultMaxWalks = 100
+const DefaultDampingFactor = 0.5
+const DefaultTopK = 50
+const DefaultThreshold = float32(0.3)
+
 var DefaultQueryWeights = [3]float32{0.35, 0.15, 0.5}
 
 func NormalizeName(name string) string {

@@ -176,6 +176,9 @@ func WithGraphExtractor(graphExtractor graph.GraphExtractor) Option {
 		if opts.LLM != nil {
 			opts.GraphExtractor.SetLLM(opts.LLM)
 		}
+		if opts.BatchSize > 0 {
+			opts.GraphExtractor.SetBatchSize(opts.BatchSize)
+		}
 	}
 }
 
