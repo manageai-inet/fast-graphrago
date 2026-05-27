@@ -11,26 +11,27 @@ Your goal is to highlight information that is relevant to the domain and the que
 2. **RELATIONSHIP DISCOVERY**: Identify and describe ALL relationships between the extracted entities. Resolve pronouns to entity names for clarity. Ensure relationship descriptions clearly explain the connection between entities.
 3. **ENTITY COVERAGE CHECK**: Verify that every identified entity is part of at least one relationship. If any entity is isolated, infer and add a relationship to connect it to the graph, even if the relationship is implicit.
 4. **OUTPUT FORMAT: STRICTLY VALID JSON**: Output MUST be in strictly valid JSON format.  Adhere to ALL standard JSON rules. The JSON MUST contain two top-level lists: "entities", "relationships". Each list item must be a JSON object with the REQUIRED fields ("name", "type", "desc" for entities; "source", "target", "desc" for relationships), all as JSON strings enclosed in DOUBLE QUOTES ONLY.  **ABSOLUTELY NO SINGLE QUOTES, BRACKETS FOR STRINGS, TRAILING COMMAS, OR MARKDOWN FORMATTING (like triple backticks) ARE PERMITTED.**  Invalid JSON output is unacceptable.
+5. **CHUNK ATTRIBUTION**: For each extracted entity and relation, set the ` + "`chunk_index`" + ` field to the zero-based index of the chunk it was extracted from (matching the ` + "`[chunk_N]`" + ` labels in the input). For a single-chunk input the value is always 0.
 
 # EXAMPLE INPUT DATA
-Domain: 
+Domain:
 Allowed Entity Types: [location, organization, person, communication]
 Document: "Radio City: Radio City is India's first private FM radio station and was started on 3 July 2001. It plays Hindi, English and regional songs."
 
 # EXAMPLE OUTPUT DATA (VALID JSON - DO NOT DEVIATE)
 {
   "entities": [
-    {"name": "RADIO CITY", "type": "organization", "desc": "India's first private FM radio station"},
-    {"name": "INDIA", "type": "location", "desc": "A country in South Asia"},
-    {"name": "FM RADIO STATION", "type": "communication", "desc": "A radio broadcasting service using frequency modulation"},
-    {"name": "ENGLISH", "type": "communication", "desc": "A language of global communication"},
-    {"name": "HINDI", "type": "communication", "desc": "An Indo-Aryan language of India"}
+    {"name": "RADIO CITY", "type": "organization", "desc": "India's first private FM radio station", "chunk_index": 0},
+    {"name": "INDIA", "type": "location", "desc": "A country in South Asia", "chunk_index": 0},
+    {"name": "FM RADIO STATION", "type": "communication", "desc": "A radio broadcasting service using frequency modulation", "chunk_index": 0},
+    {"name": "ENGLISH", "type": "communication", "desc": "A language of global communication", "chunk_index": 0},
+    {"name": "HINDI", "type": "communication", "desc": "An Indo-Aryan language of India", "chunk_index": 0}
   ],
   "relationships": [
-    {"source": {"name": "RADIO CITY", "type": "organization"}, "target": {"name": "INDIA", "type": "location"}, "desc": "Radio City is geographically situated in India"},
-    {"source": {"name": "RADIO CITY", "type": "organization"}, "target": {"name": "FM RADIO STATION", "type": "communication"}, "desc": "Radio City operates as a private FM radio station, launched on July 3, 2001"},
-    {"source": {"name": "RADIO CITY", "type": "organization"}, "target": {"name": "ENGLISH", "type": "communication"}, "desc": "Radio City's broadcasts include songs in the English language"},
-    {"source": {"name": "RADIO CITY", "type": "organization"}, "target": {"name": "HINDI", "type": "communication"}, "desc": "Radio City's broadcasts also feature songs in the Hindi language"}
+    {"source": {"name": "RADIO CITY", "type": "organization"}, "target": {"name": "INDIA", "type": "location"}, "desc": "Radio City is geographically situated in India", "chunk_index": 0},
+    {"source": {"name": "RADIO CITY", "type": "organization"}, "target": {"name": "FM RADIO STATION", "type": "communication"}, "desc": "Radio City operates as a private FM radio station, launched on July 3, 2001", "chunk_index": 0},
+    {"source": {"name": "RADIO CITY", "type": "organization"}, "target": {"name": "ENGLISH", "type": "communication"}, "desc": "Radio City's broadcasts include songs in the English language", "chunk_index": 0},
+    {"source": {"name": "RADIO CITY", "type": "organization"}, "target": {"name": "HINDI", "type": "communication"}, "desc": "Radio City's broadcasts also feature songs in the Hindi language", "chunk_index": 0}
   ]
 }`
 
@@ -41,10 +42,11 @@ const EntityRelationshipExtractionPrompt = `
 %s
 <<ENTITY_TYPES_END>>
 
-<<DOCUMENT_START>>
-**Document**:
+<<DOCUMENTS_START>>
+**Documents** (%d chunks):
+
 %s
-<<DOCUMENT_END>>
+<<DOCUMENTS_END>>
 `
 
 const EntityExtractionQuery = `Given the query below, your task is to extract all entities relevant to perform information retrieval to produce an answer.
