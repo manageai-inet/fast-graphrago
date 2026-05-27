@@ -103,6 +103,9 @@ func batchEmbed(ctx context.Context, entities []asset_manager.ContextualAsset, e
 		if err != nil {
 			return nil, err
 		}
+		if len(vectors) != len(batch) {
+			return nil, fmt.Errorf("embedder returned %d vectors for %d inputs", len(vectors), len(batch))
+		}
 		for i, e := range batch {
 			parentRef := asset_manager.AssetRef{
 				KbId:      e.KbId,

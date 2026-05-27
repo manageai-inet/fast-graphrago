@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -35,6 +36,22 @@ func (m *mockEmbedder) EmbedBatch(ctx context.Context, contents []string) ([][]f
 		result[i] = make([]float32, m.dim)
 	}
 	return result, nil
+}
+
+// mockEmbedderWithError always returns an error from EmbedBatch.
+type mockEmbedderWithError struct {
+	model string
+	dim   int
+	err   error
+}
+
+func (m *mockEmbedderWithError) GetEmbeddingModel() string { return m.model }
+func (m *mockEmbedderWithError) GetEmbeddingDim() int      { return m.dim }
+func (m *mockEmbedderWithError) Embed(ctx context.Context, content string) ([]float32, error) {
+	return nil, m.err
+}
+func (m *mockEmbedderWithError) EmbedBatch(ctx context.Context, contents []string) ([][]float32, error) {
+	return nil, m.err
 }
 
 func makeTestEntities(n int) []asset_manager.ContextualAsset {
@@ -124,5 +141,23 @@ func TestBatchEmbed_PartialLastBatch(t *testing.T) {
 	}
 	if len(emb.calls[2]) != 1 { // last batch has 1 entity
 		t.Errorf("last batch: expected 1 content, got %d", len(emb.calls[2]))
+	}
+}
+
+// TestBatchEmbed_EmbedBatchError verifies that an EmbedBatch error is propagated correctly.
+func TestBatchEmbed_EmbedBatchError(t *testing.T) {
+	entities := makeTestEntities(3)
+	expectedErr := errors.New("embed API unavailable")
+	emb := &mockEmbedderWithError{model: "test-model", dim: 3, err: expectedErr}
+
+	vecs, err := batchEmbed(context.Background(), entities, emb, 50, 1)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if err != expectedErr {
+		t.Errorf("expected %v, got %v", expectedErr, err)
+	}
+	if vecs != nil {
+		t.Errorf("expected nil slice on error, got %v", vecs)
 	}
 }
