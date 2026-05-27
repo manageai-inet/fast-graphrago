@@ -151,7 +151,9 @@ func WithMaxConcurrent(maxConcurrent int) Option {
 func WithBatchSize(batchSize int) Option {
 	return func(opts *GraphRAGServiceOptions) {
 		opts.BatchSize = batchSize
-		opts.GraphExtractor.SetBatchSize(batchSize)
+		if opts.GraphExtractor != nil {
+			opts.GraphExtractor.SetBatchSize(batchSize)
+		}
 	}
 }
 
