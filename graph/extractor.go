@@ -73,12 +73,22 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 	entityAssetsGroup := make(map[string]models.EntityAsset)
 	relationAssetsGroup := make(map[string][]models.RelationAsset)
 
-	errChan := make(chan error, len(chunks))
+	batchSize := f.BatchSize
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	batches := make([][]asset_manager.ContextualAsset, 0, (len(chunks)+batchSize-1)/batchSize)
+	for i := 0; i < len(chunks); i += batchSize {
+		end := min(i+batchSize, len(chunks))
+		batches = append(batches, chunks[i:end])
+	}
+
+	errChan := make(chan error, len(batches))
 	sem := make(chan struct{}, f.MaxConcurrent)
-	for _, ch := range chunks {
+	for _, batch := range batches {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(chunk asset_manager.ContextualAsset) {
+		go func(batch []asset_manager.ContextualAsset) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
@@ -86,12 +96,12 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 			var graph models.GraphAssets
 			var err error
 			for i := 0; i < maxAttempt; i++ {
-				logger.DebugContext(ctx, "extracting graph from chunk", slog.String("chunk", chunk.AssetId), slog.Int("attempt", i+1))
-				graph, err = f.ExtractGraphFromChunk(ctx, chunk, options)
+				logger.DebugContext(ctx, "extracting graph from batch", slog.Int("batchSize", len(batch)), slog.Int("attempt", i+1))
+				graph, err = f.ExtractGraphFromChunks(ctx, batch, options)
 				if err == nil {
 					break
 				}
-				logger.Warn("extracting graph from chunk failed: "+err.Error(), slog.String("chunk", chunk.AssetId), slog.Int("attempt", i+1))
+				logger.Warn("extracting graph from batch failed: "+err.Error(), slog.Int("batchSize", len(batch)), slog.Int("attempt", i+1))
 			}
 			if err != nil {
 				errChan <- err
@@ -103,23 +113,21 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 				if _, ok := entityAssetsGroup[entityKey]; !ok {
 					entityAssetsGroup[entityKey] = e
 				} else {
-					// if entity already exists, merge the chunk ids and description
-					logger.Warn("found duplicate entity, merging", slog.String("chunk", chunk.AssetId), slog.String("entity", e.Name), slog.String("type", e.Type))
-					updateEntity := entityAssetsGroup[entityKey]
-					updateEntity.Description = updateEntity.Description + "\n" + e.Description
-					updateEntity.ChunkIds = append(updateEntity.ChunkIds, e.ChunkIds...)
-					entityAssetsGroup[entityKey] = updateEntity
+					logger.Warn("found duplicate entity, merging", slog.String("entity", e.Name), slog.String("type", e.Type))
+					existing := entityAssetsGroup[entityKey]
+					existing.Description = existing.Description + "\n" + e.Description
+					existing.ChunkIds = append(existing.ChunkIds, e.ChunkIds...)
+					entityAssetsGroup[entityKey] = existing
 				}
 			}
 			for _, r := range graph.RelationAssets {
-				// relation can have same source and target but different description
 				keys := []string{r.Source + "|" + r.SourceType, r.Target + "|" + r.TargetType}
 				slices.Sort(keys)
 				relationKey := strings.Join(keys, "|")
 				relationAssetsGroup[relationKey] = append(relationAssetsGroup[relationKey], r)
 			}
 			mu.Unlock()
-		}(ch)
+		}(batch)
 	}
 	done := make(chan struct{})
 	go func() {
@@ -128,7 +136,7 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 	}()
 	select {
 	case err := <-errChan:
-		logger.ErrorContext(ctx, "extracting graph from chunk failed: "+err.Error())
+		logger.ErrorContext(ctx, "extracting graph from batch failed: "+err.Error())
 		return models.GraphAssets{}, err
 	case <-done:
 	}
@@ -136,8 +144,7 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 	entityKeyToId := make(map[string]string)
 	entityAssets := []models.EntityAsset{}
 	for _, entity := range entityAssetsGroup {
-		entityKey := entity.Name + "|" + entity.Type
-		entityKeyToId[entityKey] = entity.Name
+		entityKeyToId[entity.Name+"|"+entity.Type] = entity.Name
 		entityAssets = append(entityAssets, entity)
 	}
 
@@ -164,14 +171,12 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 							sourceKey := relation.Source + "|" + relation.SourceType
 							targetKey := relation.Target + "|" + relation.TargetType
 							if _, ok := entityKeyToId[sourceKey]; !ok {
-								// if last try error
 								if i == f.MaxRetryAttempt-1 {
 									err = fmt.Errorf("relation bind to source entity %s which is not found", sourceKey)
 								}
 								isFailed = true
 							}
 							if _, ok := entityKeyToId[targetKey]; !ok {
-								// if last try error
 								if i == f.MaxRetryAttempt-1 {
 									err = fmt.Errorf("relation bind to target entity %s which is not found", targetKey)
 								}
@@ -221,10 +226,7 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 }
 
 func (f *FastGraphExtractor) DeduplicateRelations(ctx context.Context, relations []models.RelationAsset) ([]models.RelationAsset, error) {
-	relationClusterTool, err := models.GetRelationClusterTool()
-	if err != nil {
-		return []models.RelationAsset{}, err
-	}
+	relationClusterTool := f.deduplicationTool
 	inputCSV := ""
 	for i, relation := range relations {
 		inputCSV += fmt.Sprintf(
@@ -367,11 +369,7 @@ func (f *FastGraphExtractor) ExtractGraphFromChunk(ctx context.Context, chunk as
 func (f *FastGraphExtractor) ExtractEntitiesFromQuery(ctx context.Context, query string) (models.ExtractedQuery, error) {
 	logger := asset_manager.GetLogger(f)
 	logger.InfoContext(ctx, "extracting entities from query", slog.String("query", query))
-	queryExtractionTool, err := models.GetQueryExtractionTool()
-	if err != nil {
-		logger.ErrorContext(ctx, "failed to get query extraction tool: "+err.Error())
-		return models.ExtractedQuery{}, err
-	}
+	queryExtractionTool := f.queryTool
 	entityExtractionPrompt := fmt.Sprintf(prompts.EntityExtractionQuery, query)
 
 	messages := []openai.ChatCompletionMessage{
@@ -382,6 +380,7 @@ func (f *FastGraphExtractor) ExtractEntitiesFromQuery(ctx context.Context, query
 	}
 	maxAttempt := max(f.MaxRetryAttempt, 1)
 	var generation *openai.ChatCompletionMessage
+	var err error
 	var generationErr error
 	var extracted *models.ExtractedQuery
 	for i := 0; i < maxAttempt; i++ {
