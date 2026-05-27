@@ -383,42 +383,48 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 
 	// 4. Generate Embeddings for Nodes (Entities)
 	logger.DebugContext(ctx, "generating embeddings for entities", slog.String("kbId", kbId), slog.Int("entities", len(entityAssets)))
-	vectorAssets := []asset_manager.VectorAsset{}
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	sem := make(chan struct{}, g.MaxConcurrent)
-	errsCh := make(chan error, len(entityAssets))
-	for _, entity := range entityAssets {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(vecArray *[]asset_manager.VectorAsset, entity *asset_manager.ContextualAsset) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			// Refs and EmbeddingModel of vector asset should be already set in this function
-			// While for entity is not need.
-			v, err := g.VectorStore.EmbedAsset(ctx, entity, nil)
-			if err != nil {
-				errsCh <- err
-				return
-			}
-			entity.EmbeddingModel = v.EmbeddingModel
-			mu.Lock()
-			*vecArray = append(*vecArray, v)
-			mu.Unlock()
-		}(&vectorAssets, &entity)
-	}
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case err := <-errsCh:
-		logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
-		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
-	case <-done:
+	var vectorAssets []asset_manager.VectorAsset
+	if g.Embedder != nil {
+		var embedErr error
+		vectorAssets, embedErr = batchEmbed(ctx, entityAssets, g.Embedder, g.EmbedBatchSize, g.MaxConcurrent)
+		if embedErr != nil {
+			logger.ErrorContext(ctx, embedErr.Error(), slog.String("kbId", kbId))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, embedErr
+		}
+	} else {
+		vectorAssets = make([]asset_manager.VectorAsset, 0, len(entityAssets))
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		sem := make(chan struct{}, g.MaxConcurrent)
+		errsCh := make(chan error, len(entityAssets))
+		for _, entity := range entityAssets {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(vecArray *[]asset_manager.VectorAsset, entity *asset_manager.ContextualAsset) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				v, err := g.VectorStore.EmbedAsset(ctx, entity, nil)
+				if err != nil {
+					errsCh <- err
+					return
+				}
+				entity.EmbeddingModel = v.EmbeddingModel
+				mu.Lock()
+				*vecArray = append(*vecArray, v)
+				mu.Unlock()
+			}(&vectorAssets, &entity)
+		}
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case err := <-errsCh:
+			logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
+		case <-done:
+		}
 	}
 	logger.DebugContext(ctx, "generated embeddings for entities successfully", slog.String("kbId", kbId), slog.Int("entities", len(vectorAssets)))
 
