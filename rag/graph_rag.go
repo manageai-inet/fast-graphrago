@@ -77,6 +77,57 @@ func NewGraphRAGService(
 	}
 }
 
+// batchEmbed embeds entities in batches using EmbedBatch, returning one VectorAsset per entity.
+// Batches are processed sequentially in order; maxConcurrent is reserved for future use.
+// Results are ordered to match entities.
+func batchEmbed(ctx context.Context, entities []asset_manager.ContextualAsset, embedder asset_manager.Embedder, batchSize, maxConcurrent int) ([]asset_manager.VectorAsset, error) {
+	if batchSize <= 0 {
+		batchSize = 50
+	}
+	n := len(entities)
+	numBatches := (n + batchSize - 1) / batchSize
+	model := embedder.GetEmbeddingModel()
+
+	vectorAssets := make([]asset_manager.VectorAsset, n)
+
+	for b := 0; b < numBatches; b++ {
+		start := b * batchSize
+		end := min(start+batchSize, n)
+		batch := entities[start:end]
+
+		contents := make([]string, len(batch))
+		for i, e := range batch {
+			contents[i] = e.Content
+		}
+		vectors, err := embedder.EmbedBatch(ctx, contents)
+		if err != nil {
+			return nil, err
+		}
+		for i, e := range batch {
+			parentRef := asset_manager.AssetRef{
+				KbId:      e.KbId,
+				AssetType: e.AssetType,
+				AssetId:   e.AssetId,
+				RefType:   asset_manager.AssetRefTypeParent,
+			}
+			refs := []asset_manager.AssetRef{parentRef}
+			m := model
+			vectorAssets[start+i] = asset_manager.VectorAsset{
+				KbId:           e.KbId,
+				AssetId:        e.AssetId,
+				Version:        e.Version,
+				Content:        e.Content,
+				Refs:           &refs,
+				Labels:         e.Labels,
+				Metadata:       e.Metadata,
+				EmbeddingModel: &m,
+				EmbededVector:  vectors[i],
+			}
+		}
+	}
+	return vectorAssets, nil
+}
+
 func (g *GraphRAGServiceImpl) SetLogger(logger *slog.Logger) {
 	g.LoggingCapacity.SetLogger(logger)
 	g.GraphExtractor.SetLogger(logger)
