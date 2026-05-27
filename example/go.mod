@@ -4,13 +4,16 @@ go 1.25.0
 
 require (
 	github.com/elastic/go-elasticsearch/v8 v8.19.4
+	github.com/gofiber/fiber/v3 v3.2.0
 	github.com/joho/godotenv v1.5.1
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/lmittmann/tint v1.1.3
-	github.com/manageai-inet/agentic-assets v0.0.0-20260427103748-3cef0a0108fb
+	github.com/manageai-inet/agentic-assets v0.1.0
 	github.com/manageai-inet/agentic-assets-elasticsearch/v8 v8.0.0-20260427043423-7fdfdc3f8645
 	github.com/manageai-inet/agentic-assets-manageai v0.0.0-20260427084026-85ee7fb8aeb3
 	github.com/manageai-inet/fast-graphrago v0.0.0-20260427071256-5e851118addc
+	github.com/swaggo/swag v1.16.6
+	github.com/yokeTH/gofiber-scalar/scalar/v3 v3.1.10
 )
 
 require (
@@ -27,7 +30,6 @@ require (
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/spec v0.20.9 // indirect
 	github.com/go-openapi/swag v0.22.3 // indirect
-	github.com/gofiber/fiber/v3 v3.2.0 // indirect
 	github.com/gofiber/schema v1.7.1 // indirect
 	github.com/gofiber/utils/v2 v2.0.4 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
@@ -42,7 +44,6 @@ require (
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/sv-tools/openapi v0.4.0 // indirect
-	github.com/swaggo/swag v1.16.6 // indirect
 	github.com/swaggo/swag/v2 v2.0.0-rc5 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
@@ -52,7 +53,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.70.0 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
-	github.com/yokeTH/gofiber-scalar/scalar/v3 v3.1.10 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
