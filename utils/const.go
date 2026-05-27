@@ -35,11 +35,12 @@ const DefaultChunkSize = 500
 const DefaultChunkOverlap = 50
 
 const DefaultMaxRetryAttempt = 1
-const DefaultMaxConcurrent = 1
-const DefaultMaxWalks = 100
-const DefaultDampingFactor = 0.5
-const DefaultTopK = 50
-const DefaultThreshold = float32(0.3)
+const DefaultMaxConcurrent   = 3
+const DefaultBatchSize        = 5
+const DefaultMaxWalks         = 100
+const DefaultDampingFactor    = 0.5
+const DefaultTopK             = 50
+const DefaultThreshold        = float32(0.3)
 var DefaultQueryWeights = [3]float32{0.35, 0.15, 0.5}
 
 func NormalizeName(name string) string {
