@@ -7,6 +7,7 @@ import (
 	"github.com/manageai-inet/fast-graphrago/llm"
 	"github.com/manageai-inet/fast-graphrago/utils"
 
+	asset_manager "github.com/manageai-inet/agentic-assets"
 	chunk "github.com/manageai-inet/agentic-assets/chunk"
 )
 
@@ -15,12 +16,16 @@ type GraphRAGServiceCompileTimeOptions struct {
 	MaxConcurrent int `json:"max_concurrent"`
 	// (Engine Config) Batch size for graph extraction (chunks per LLM call)
 	BatchSize int `json:"batch_size"`
+	// (Engine Config) Batch size for embedding (entities per EmbedBatch API call)
+	EmbedBatchSize int `json:"embed_batch_size"`
 	// (Engine Config) LLM for entities and relations extraction, should support tool calling
 	LLM llm.LLM
 	// (Engine Config) Chunk Extractor
 	ChunkingExtractor chunk.ChunkExtractor
 	// (Engine Config) Graph Extractor
 	GraphExtractor graph.GraphExtractor
+	// (Engine Config) Embedder for batch embedding; if nil, falls back to per-entity EmbedAsset
+	Embedder asset_manager.Embedder
 }
 
 type GraphRAGServiceRuntimeOptions struct {
@@ -58,8 +63,9 @@ func NewGraphRAGServiceOptions() *GraphRAGServiceOptions {
 	defaultThreshold := utils.DefaultThreshold
 	return &GraphRAGServiceOptions{
 		GraphRAGServiceCompileTimeOptions: GraphRAGServiceCompileTimeOptions{
-			MaxConcurrent: utils.DefaultMaxConcurrent,
-			BatchSize:     utils.DefaultBatchSize,
+			MaxConcurrent:  utils.DefaultMaxConcurrent,
+			BatchSize:      utils.DefaultBatchSize,
+			EmbedBatchSize: utils.DefaultEmbedBatchSize,
 		},
 		GraphRAGServiceRuntimeOptions: GraphRAGServiceRuntimeOptions{
 			Domain:        utils.DefaultDomain,
@@ -265,5 +271,17 @@ func WithVersion(version *int) Option {
 func WithLabel(label *string) Option {
 	return func(opts *GraphRAGServiceOptions) {
 		opts.Label = label
+	}
+}
+
+func WithEmbedder(embedder asset_manager.Embedder) Option {
+	return func(opts *GraphRAGServiceOptions) {
+		opts.Embedder = embedder
+	}
+}
+
+func WithEmbedBatchSize(size int) Option {
+	return func(opts *GraphRAGServiceOptions) {
+		opts.EmbedBatchSize = size
 	}
 }
