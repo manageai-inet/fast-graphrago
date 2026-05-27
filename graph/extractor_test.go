@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/manageai-inet/fast-graphrago/models"
@@ -18,6 +19,7 @@ import (
 // mockLLM replays pre-set responses in order.
 type mockLLM struct {
 	responses   []openai.ChatCompletionMessage
+	mu          sync.Mutex
 	callCount   int
 	errToReturn error
 }
@@ -31,6 +33,8 @@ func (m *mockLLM) Generate(
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.callCount >= len(m.responses) {
 		return nil, fmt.Errorf("mockLLM: unexpected call %d (only %d responses configured)", m.callCount, len(m.responses))
 	}
@@ -279,5 +283,17 @@ func TestExtractGraph_BatchesChunks(t *testing.T) {
 	}
 	if entityChunkMap["eve"] != "c4" {
 		t.Errorf("eve ChunkId = %q, want c4", entityChunkMap["eve"])
+	}
+}
+
+// TestExtractGraph_EmptyChunks verifies ExtractGraph handles an empty input without error.
+func TestExtractGraph_EmptyChunks(t *testing.T) {
+	e := newTestExtractor(nil)
+	result, err := e.ExtractGraph(context.Background(), []asset_manager.ContextualAsset{}, GraphExtractionOptions{Domain: "test"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.EntityAssets) != 0 || len(result.RelationAssets) != 0 {
+		t.Errorf("expected empty result, got entities=%d relations=%d", len(result.EntityAssets), len(result.RelationAssets))
 	}
 }

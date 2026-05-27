@@ -64,6 +64,9 @@ func (f *FastGraphExtractor) SetBatchSize(batchSize int) {
 
 // Extract Graph From given batch of chunks, including deduplication and merge processes for entities and relations
 func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_manager.ContextualAsset, options GraphExtractionOptions) (models.GraphAssets, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -136,6 +139,7 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 	}()
 	select {
 	case err := <-errChan:
+		cancel()
 		logger.ErrorContext(ctx, "extracting graph from batch failed: "+err.Error())
 		return models.GraphAssets{}, err
 	case <-done:
@@ -150,13 +154,14 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 
 	logger.DebugContext(ctx, "deduping relations", slog.Int("relations", len(relationAssetsGroup)))
 	relationAssets := []models.RelationAsset{}
+	var dedupWg sync.WaitGroup
 	dedupSem := make(chan struct{}, f.MaxConcurrent)
 	dedupErrChan := make(chan error, len(relationAssetsGroup))
 	for rk, relationWithSameKey := range relationAssetsGroup {
-		wg.Add(1)
+		dedupWg.Add(1)
 		dedupSem <- struct{}{}
 		go func(relGroup []models.RelationAsset) {
-			defer wg.Done()
+			defer dedupWg.Done()
 			defer func() { <-dedupSem }()
 
 			if len(relGroup) > 1 {
@@ -208,11 +213,12 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 	}
 	doneDedup := make(chan struct{})
 	go func() {
-		wg.Wait()
+		dedupWg.Wait()
 		close(doneDedup)
 	}()
 	select {
 	case err := <-dedupErrChan:
+		cancel()
 		logger.ErrorContext(ctx, "deduping relations failed: "+err.Error())
 		return models.GraphAssets{}, err
 	case <-doneDedup:
