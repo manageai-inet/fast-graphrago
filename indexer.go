@@ -38,7 +38,7 @@ func (f *FastGraphIndexer) SetLogger(logger *slog.Logger) {
 
 func (f *FastGraphIndexer) Index(ctx context.Context, kbId string, sources []am.KnowledgeSource, labels *[]string, metadata *map[string]any, config *map[string]any) (am.IndexingResult, error) {
 	logger := am.GetLogger(f)
-	logger.InfoContext(ctx, "starting to index", slog.String("kbId", kbId), slog.Any("sources", sources), slog.Any("labels", labels), slog.Any("metadata", metadata), slog.Any("config", config))
+	logger.InfoContext(ctx, "starting to index", slog.String("kbId", kbId), slog.Int("sources", len(sources)), slog.Any("labels", labels), slog.Any("metadata", metadata), slog.Any("config", config))
 	// assets and vectors already inserted to vector storage and asset storage
 	pageSources := f.FilterSupportedSources(sources)
 	// sort page by source name, source name will be `kbId:filename.ext:page_number`
