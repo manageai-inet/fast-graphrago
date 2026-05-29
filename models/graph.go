@@ -62,6 +62,25 @@ func GetRelationClusterTool() (openai.ChatCompletionToolParam, error) {
 	return tool, nil
 }
 
+type PairGroupResult struct {
+	GroupId  int                      `json:"group_id"  jsonschema:"The 0-based index of this group, matching the GROUP N label in the input"`
+	Clusters map[string]RelationGroup `json:"clusters"  jsonschema:"Map of relation clusters for this group, key is cluster id"`
+}
+
+type BatchRelationClusters struct {
+	Groups []PairGroupResult `json:"groups" jsonschema:"Array of results, one per input GROUP; every GROUP N in the input must appear here"`
+}
+
+func GetBatchRelationClusterTool() (openai.ChatCompletionToolParam, error) {
+	name := "batch_relation_cluster"
+	description := "Cluster relations for multiple entity pairs at once; one entry per GROUP in the input"
+	tool, err := utils.StructToTool[BatchRelationClusters](name, description)
+	if err != nil {
+		return openai.ChatCompletionToolParam{}, err
+	}
+	return tool, nil
+}
+
 const NamedEntityType = "NAMED"
 const GenericEntityType = "GENERIC"
 const QueryEntityType = "QUERY"

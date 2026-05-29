@@ -38,6 +38,7 @@ const DefaultMaxRetryAttempt = 1
 const DefaultMaxConcurrent = 5
 const DefaultBatchSize = 5
 const DefaultEmbedBatchSize = 32
+const DefaultDedupBatchSize = 10
 const DefaultMaxWalks = 100
 const DefaultDampingFactor = 0.5
 const DefaultTopK = 50
