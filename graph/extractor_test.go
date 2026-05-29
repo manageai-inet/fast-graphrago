@@ -379,3 +379,149 @@ func TestExtractGraph_EmptyChunks(t *testing.T) {
 		t.Errorf("expected empty result, got entities=%d relations=%d", len(result.EntityAssets), len(result.RelationAssets))
 	}
 }
+
+// TestDeduplicateRelationsBatch_Basic verifies two groups are merged in one LLM call.
+func TestDeduplicateRelationsBatch_Basic(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "collaborated with", ChunkIds: []string{"c1"}},
+		},
+		{
+			{Source: "acme", SourceType: "organization", Target: "globex", TargetType: "organization", Description: "partner of", ChunkIds: []string{"c2"}},
+			{Source: "acme", SourceType: "organization", Target: "globex", TargetType: "organization", Description: "strategic alliance", ChunkIds: []string{"c3"}},
+		},
+	}
+
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "works and collaborates with", Indices: []int{0, 1}},
+				},
+			},
+			{
+				GroupId: 1,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "acme", Type: "organization"}, Target: models.RelativeEntity{Name: "globex", Type: "organization"}, Desc: "partner and strategic ally", Indices: []int{0, 1}},
+				},
+			},
+		},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	results, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 group results, got %d", len(results))
+	}
+	if len(results[0]) != 1 {
+		t.Errorf("group 0: expected 1 merged relation, got %d", len(results[0]))
+	}
+	if len(results[1]) != 1 {
+		t.Errorf("group 1: expected 1 merged relation, got %d", len(results[1]))
+	}
+	if len(results[0][0].ChunkIds) != 2 {
+		t.Errorf("group 0 ChunkIds: want 2, got %d", len(results[0][0].ChunkIds))
+	}
+	if e.LLM.(*mockLLM).callCount != 1 {
+		t.Errorf("expected 1 LLM call, got %d", e.LLM.(*mockLLM).callCount)
+	}
+}
+
+// TestDeduplicateRelationsBatch_Empty verifies nil input returns nil without calling LLM.
+func TestDeduplicateRelationsBatch_Empty(t *testing.T) {
+	e := newTestExtractor(nil)
+	results, err := e.DeduplicateRelationsBatch(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil results for empty input, got %v", results)
+	}
+	if e.LLM.(*mockLLM).callCount != 0 {
+		t.Errorf("expected 0 LLM calls for empty input, got %d", e.LLM.(*mockLLM).callCount)
+	}
+}
+
+// TestDeduplicateRelationsBatch_InvalidGroupId verifies an out-of-range group_id causes an error.
+func TestDeduplicateRelationsBatch_InvalidGroupId(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "knows", ChunkIds: []string{"c1"}},
+		},
+	}
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 99,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "...", Indices: []int{0}},
+				},
+			},
+		},
+	})
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error for invalid group_id, got nil")
+	}
+}
+
+// TestDeduplicateRelationsBatch_MissingGroup verifies an error when a group_id is absent from the response.
+func TestDeduplicateRelationsBatch_MissingGroup(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "knows", ChunkIds: []string{"c1"}},
+		},
+		{
+			{Source: "acme", SourceType: "organization", Target: "globex", TargetType: "organization", Description: "partner of", ChunkIds: []string{"c2"}},
+			{Source: "acme", SourceType: "organization", Target: "globex", TargetType: "organization", Description: "ally", ChunkIds: []string{"c3"}},
+		},
+	}
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "...", Indices: []int{0, 1}},
+				},
+			},
+		},
+	})
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error when group missing from response, got nil")
+	}
+}
+
+// TestDeduplicateRelationsBatch_InvalidRelationIndex verifies an out-of-range index within a cluster causes an error.
+func TestDeduplicateRelationsBatch_InvalidRelationIndex(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "knows", ChunkIds: []string{"c1"}},
+		},
+	}
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "...", Indices: []int{0, 99}},
+				},
+			},
+		},
+	})
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error for out-of-range relation index, got nil")
+	}
+}

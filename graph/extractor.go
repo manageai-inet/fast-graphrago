@@ -19,13 +19,15 @@ import (
 )
 
 type FastGraphExtractor struct {
-	LLM               llm.LLM
-	MaxRetryAttempt   int
-	MaxConcurrent     int
-	BatchSize         int
-	extractionTool    openai.ChatCompletionToolParam
-	deduplicationTool openai.ChatCompletionToolParam
-	queryTool         openai.ChatCompletionToolParam
+	LLM                    llm.LLM
+	MaxRetryAttempt        int
+	MaxConcurrent          int
+	BatchSize              int
+	DedupBatchSize         int
+	extractionTool         openai.ChatCompletionToolParam
+	deduplicationTool      openai.ChatCompletionToolParam
+	batchDeduplicationTool openai.ChatCompletionToolParam
+	queryTool              openai.ChatCompletionToolParam
 	asset_manager.LoggingCapacity
 }
 
@@ -38,19 +40,25 @@ func NewFastGraphExtractor(llm llm.LLM) *FastGraphExtractor {
 	if err != nil {
 		panic("failed to build deduplication tool schema: " + err.Error())
 	}
+	batchDeduplicationTool, err := models.GetBatchRelationClusterTool()
+	if err != nil {
+		panic("failed to build batch deduplication tool schema: " + err.Error())
+	}
 	queryTool, err := models.GetQueryExtractionTool()
 	if err != nil {
 		panic("failed to build query tool schema: " + err.Error())
 	}
 	return &FastGraphExtractor{
-		LLM:               llm,
-		MaxRetryAttempt:   utils.DefaultMaxRetryAttempt,
-		MaxConcurrent:     utils.DefaultMaxConcurrent,
-		BatchSize:         utils.DefaultBatchSize,
-		extractionTool:    extractionTool,
-		deduplicationTool: deduplicationTool,
-		queryTool:         queryTool,
-		LoggingCapacity:   *asset_manager.GetDefaultLoggingCapacity(),
+		LLM:                    llm,
+		MaxRetryAttempt:        utils.DefaultMaxRetryAttempt,
+		MaxConcurrent:          utils.DefaultMaxConcurrent,
+		BatchSize:              utils.DefaultBatchSize,
+		DedupBatchSize:         utils.DefaultDedupBatchSize,
+		extractionTool:         extractionTool,
+		deduplicationTool:      deduplicationTool,
+		batchDeduplicationTool: batchDeduplicationTool,
+		queryTool:              queryTool,
+		LoggingCapacity:        *asset_manager.GetDefaultLoggingCapacity(),
 	}
 }
 
@@ -290,6 +298,81 @@ func (f *FastGraphExtractor) DeduplicateRelations(ctx context.Context, relations
 		})
 	}
 	return newRelations, nil
+}
+
+// DeduplicateRelationsBatch sends multiple pair groups in one LLM call and returns
+// deduplicated relations for each group. Indices in each group's clusters are local
+// (0-based within that group's slice), matching the GROUP N CSV in the prompt.
+func (f *FastGraphExtractor) DeduplicateRelationsBatch(ctx context.Context, groups [][]models.RelationAsset) ([][]models.RelationAsset, error) {
+	if len(groups) == 0 {
+		return nil, nil
+	}
+
+	var sb strings.Builder
+	for gi, group := range groups {
+		src := group[0].Source + "|" + group[0].SourceType
+		tgt := group[0].Target + "|" + group[0].TargetType
+		fmt.Fprintf(&sb, "GROUP %d (%s → %s):\n", gi, src, tgt)
+		sb.WriteString("index,source_name,source_type,target_name,target_type,desc\n")
+		for i, r := range group {
+			fmt.Fprintf(&sb, "%d,%s,%s,%s,%s,%s\n", i, r.Source, r.SourceType, r.Target, r.TargetType, r.Description)
+		}
+		sb.WriteString("\n")
+	}
+
+	messages := []openai.ChatCompletionMessage{
+		{Role: "system", Content: prompts.DeduplicateBatchRelationsSystem},
+		{Role: "user", Content: fmt.Sprintf(prompts.DeduplicateBatchRelationsPrompt, sb.String())},
+	}
+	toolChoice := openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openai.String("required")}
+	generation, err := f.LLM.Generate(ctx, messages, []openai.ChatCompletionToolParam{f.batchDeduplicationTool}, &toolChoice)
+	if err != nil {
+		return nil, err
+	}
+	if len(generation.ToolCalls) == 0 {
+		return nil, fmt.Errorf("no tool calls found")
+	}
+
+	batchClusters, err := utils.HandleToolCall[models.BatchRelationClusters](generation.ToolCalls[0].Function.Arguments)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([][]models.RelationAsset, len(groups))
+	for _, groupResult := range batchClusters.Groups {
+		gi := groupResult.GroupId
+		if gi < 0 || gi >= len(groups) {
+			return nil, fmt.Errorf("invalid group_id %d in LLM response (batch has %d groups)", gi, len(groups))
+		}
+		srcGroup := groups[gi]
+		newRelations := make([]models.RelationAsset, 0, len(groupResult.Clusters))
+		for _, cluster := range groupResult.Clusters {
+			chunkIds := []string{}
+			for _, idx := range cluster.Indices {
+				if idx < 0 || idx >= len(srcGroup) {
+					return nil, fmt.Errorf("invalid relation index %d in group %d (group has %d relations)", idx, gi, len(srcGroup))
+				}
+				chunkIds = append(chunkIds, srcGroup[idx].ChunkIds...)
+			}
+			newRelations = append(newRelations, models.RelationAsset{
+				Source:      utils.NormalizeName(cluster.Source.Name),
+				SourceType:  utils.NormalizeName(cluster.Source.Type),
+				Target:      utils.NormalizeName(cluster.Target.Name),
+				TargetType:  utils.NormalizeName(cluster.Target.Type),
+				Description: cluster.Desc,
+				ChunkIds:    chunkIds,
+			})
+		}
+		results[gi] = newRelations
+	}
+
+	for gi, r := range results {
+		if r == nil {
+			return nil, fmt.Errorf("LLM did not return result for group %d", gi)
+		}
+	}
+
+	return results, nil
 }
 
 // extractEntityContext searches for entityName in chunkContent and returns a
