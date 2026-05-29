@@ -15,6 +15,7 @@ import (
 	"github.com/manageai-inet/fast-graphrago/graph"
 	"github.com/manageai-inet/fast-graphrago/llm"
 	"github.com/manageai-inet/fast-graphrago/models"
+	"github.com/manageai-inet/fast-graphrago/utils"
 
 	"github.com/james-bowman/sparse"
 
@@ -77,6 +78,59 @@ func NewGraphRAGService(
 	}
 }
 
+// batchEmbed embeds entities in batches using EmbedBatch, returning one VectorAsset per entity.
+// Batches are processed sequentially; results are ordered to match entities.
+func batchEmbed(ctx context.Context, entities []asset_manager.ContextualAsset, embedder asset_manager.Embedder, batchSize int) ([]asset_manager.VectorAsset, error) {
+	if batchSize <= 0 {
+		batchSize = utils.DefaultEmbedBatchSize
+	}
+	n := len(entities)
+	numBatches := (n + batchSize - 1) / batchSize
+	model := embedder.GetEmbeddingModel()
+
+	vectorAssets := make([]asset_manager.VectorAsset, n)
+
+	for b := 0; b < numBatches; b++ {
+		start := b * batchSize
+		end := min(start+batchSize, n)
+		batch := entities[start:end]
+
+		contents := make([]string, len(batch))
+		for i, e := range batch {
+			contents[i] = e.Content
+		}
+		vectors, err := embedder.EmbedBatch(ctx, contents)
+		if err != nil {
+			return nil, err
+		}
+		if len(vectors) != len(batch) {
+			return nil, fmt.Errorf("embedder returned %d vectors for %d inputs", len(vectors), len(batch))
+		}
+		for i, e := range batch {
+			parentRef := asset_manager.AssetRef{
+				KbId:      e.KbId,
+				AssetType: e.AssetType,
+				AssetId:   e.AssetId,
+				RefType:   asset_manager.AssetRefTypeParent,
+			}
+			refs := []asset_manager.AssetRef{parentRef}
+			m := model
+			vectorAssets[start+i] = asset_manager.VectorAsset{
+				KbId:           e.KbId,
+				AssetId:        e.AssetId,
+				Version:        e.Version,
+				Content:        e.Content,
+				Refs:           &refs,
+				Labels:         e.Labels,
+				Metadata:       e.Metadata,
+				EmbeddingModel: &m,
+				EmbededVector:  vectors[i],
+			}
+		}
+	}
+	return vectorAssets, nil
+}
+
 func (g *GraphRAGServiceImpl) SetLogger(logger *slog.Logger) {
 	g.LoggingCapacity.SetLogger(logger)
 	g.GraphExtractor.SetLogger(logger)
@@ -122,12 +176,12 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 		if source.SourceName == "" {
 			msg := fmt.Sprintf("page source of kbId %s at position %d has empty source name", kbId, i)
 			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, fmt.Errorf(msg)
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
 		}
 		if source.SourceContents == nil || *source.SourceContents == "" {
 			msg := fmt.Sprintf("page source name %s of kbId %s at position %d has empty source contents", source.SourceName, kbId, i)
 			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, fmt.Errorf(msg)
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
 		}
 		pageId := fmt.Sprintf("%s:%s:%d", kbId, filename, i)
 		pages = append(pages, ImmediatePage{
@@ -180,7 +234,7 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 		if pageNumber >= len(pageAssets) {
 			msg := fmt.Sprintf("page asset not found for page number %d (page assets length: %d)", pageNumber, len(pageAssets))
 			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, fmt.Errorf(msg)
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
 		}
 		page := pageAssets[pageNumber]
 		refs := []asset_manager.AssetRef{
@@ -329,42 +383,48 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 
 	// 4. Generate Embeddings for Nodes (Entities)
 	logger.DebugContext(ctx, "generating embeddings for entities", slog.String("kbId", kbId), slog.Int("entities", len(entityAssets)))
-	vectorAssets := []asset_manager.VectorAsset{}
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	sem := make(chan struct{}, g.MaxConcurrent)
-	errsCh := make(chan error, len(entityAssets))
-	for _, entity := range entityAssets {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(vecArray *[]asset_manager.VectorAsset, entity *asset_manager.ContextualAsset) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			// Refs and EmbeddingModel of vector asset should be already set in this function
-			// While for entity is not need.
-			v, err := g.VectorStore.EmbedAsset(ctx, entity, nil)
-			if err != nil {
-				errsCh <- err
-				return
-			}
-			entity.EmbeddingModel = v.EmbeddingModel
-			mu.Lock()
-			*vecArray = append(*vecArray, v)
-			mu.Unlock()
-		}(&vectorAssets, &entity)
-	}
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case err := <-errsCh:
-		logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
-		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
-	case <-done:
+	var vectorAssets []asset_manager.VectorAsset
+	if g.Embedder != nil {
+		var embedErr error
+		vectorAssets, embedErr = batchEmbed(ctx, entityAssets, g.Embedder, g.EmbedBatchSize)
+		if embedErr != nil {
+			logger.ErrorContext(ctx, embedErr.Error(), slog.String("kbId", kbId))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, embedErr
+		}
+	} else {
+		vectorAssets = make([]asset_manager.VectorAsset, 0, len(entityAssets))
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		sem := make(chan struct{}, g.MaxConcurrent)
+		errsCh := make(chan error, len(entityAssets))
+		for _, entity := range entityAssets {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(vecArray *[]asset_manager.VectorAsset, entity *asset_manager.ContextualAsset) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				v, err := g.VectorStore.EmbedAsset(ctx, entity, nil)
+				if err != nil {
+					errsCh <- err
+					return
+				}
+				entity.EmbeddingModel = v.EmbeddingModel
+				mu.Lock()
+				*vecArray = append(*vecArray, v)
+				mu.Unlock()
+			}(&vectorAssets, &entity)
+		}
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case err := <-errsCh:
+			logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
+		case <-done:
+		}
 	}
 	logger.DebugContext(ctx, "generated embeddings for entities successfully", slog.String("kbId", kbId), slog.Int("entities", len(vectorAssets)))
 

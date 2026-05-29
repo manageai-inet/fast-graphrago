@@ -26,6 +26,7 @@ import (
 	amk "github.com/manageai-inet/agentic-assets/knowledge_extractor"
 	mai "github.com/manageai-inet/agentic-assets-manageai"
 	amai "github.com/manageai-inet/agentic-assets-manageai"
+	maiclient "github.com/manageai-inet/Eino-ManageAI-Extension/components/core/manageai"
 )
 
 type AppConfig struct {
@@ -50,6 +51,10 @@ type AppConfig struct {
 
 	// Maximum number of concurrent operations for RAG
 	MaxConcurrent int `envconfig:"max_concurrent" default:"1"`
+	// Batch size for embedding (entities per EmbedBatch API call)
+	EmbedBatchSize int `envconfig:"embed_batch_size" default:"32"`
+	// LLM HTTP timeout in seconds (default 5 minutes to support large batch extraction)
+	LLMTimeoutSeconds int `envconfig:"llm_timeout_seconds" default:"300"`
 
 	// OCR Service Configuration
 	OcrServiceProjectId string `envconfig:"ocr_service_project_id" default:""`
@@ -91,7 +96,16 @@ func InitializeFastGraphIndexerFromConfig(cfg *AppConfig) (*fastgraphrag.FastGra
 
 	// LLM Setup
 	// You must set the MAI_BASE_URL, MAI_MODEL_ID and MAI_API_KEY environment variables before running this application.
-	chatModel :=  mai.NewLLMFromEnv()
+	maiC, err := maiclient.GetDefaultClient()
+	if err != nil {
+		logger.Error("Failed to initialize ManageAI Client", slog.Any("error", err))
+		return nil, err
+	}
+	if _, err := maiC.WithTimeout(time.Duration(cfg.LLMTimeoutSeconds) * time.Second); err != nil {
+		logger.Error("Failed to set LLM timeout", slog.Any("error", err))
+		return nil, err
+	}
+	chatModel := mai.NewLLM(maiC)
 
 	// To use OpenAI, you can uncomment the following lines and make sure to set the OPENAI_MODEL_ID and OPENAI_API_KEY environment variables before running this application.
 	// chatModel := llm.NewOpenAIChatModelFromEnv()
@@ -153,6 +167,8 @@ func InitializeFastGraphIndexerFromConfig(cfg *AppConfig) (*fastgraphrag.FastGra
 	opts = append(opts, rag.WithMaxConcurrent(cfg.MaxConcurrent))
 	opts = append(opts, rag.WithChunkingExtractor(chunkExt))
 	opts = append(opts, rag.WithGraphExtractor(graphExt))
+	opts = append(opts, rag.WithEmbedder(embedder))
+	opts = append(opts, rag.WithEmbedBatchSize(cfg.EmbedBatchSize))
 	opts = append(opts, rag.WithLLM(chatModel))
 	// Initialize the FastGraphRAG Indexer with the chat model, vector store, and asset store.
 	fgIndexer, err := fastgraphrag.New(chatModel, vectorStore, assetStore, opts...)

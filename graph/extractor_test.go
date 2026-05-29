@@ -1,0 +1,650 @@
+package graph
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+
+	"github.com/manageai-inet/fast-graphrago/models"
+	"github.com/manageai-inet/fast-graphrago/utils"
+
+	"github.com/openai/openai-go"
+
+	asset_manager "github.com/manageai-inet/agentic-assets"
+)
+
+// mockLLM replays pre-set responses in order.
+type mockLLM struct {
+	responses   []openai.ChatCompletionMessage
+	mu          sync.Mutex
+	callCount   int
+	errToReturn error
+}
+
+func (m *mockLLM) Generate(
+	_ context.Context,
+	_ []openai.ChatCompletionMessage,
+	_ []openai.ChatCompletionToolParam,
+	_ *openai.ChatCompletionToolChoiceOptionUnionParam,
+) (*openai.ChatCompletionMessage, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.callCount >= len(m.responses) {
+		return nil, fmt.Errorf("mockLLM: unexpected call %d (only %d responses configured)", m.callCount, len(m.responses))
+	}
+	resp := m.responses[m.callCount]
+	m.callCount++
+	return &resp, nil
+}
+
+func toolCallMsg(v any) openai.ChatCompletionMessage {
+	b, _ := json.Marshal(v)
+	return openai.ChatCompletionMessage{
+		ToolCalls: []openai.ChatCompletionMessageToolCall{
+			{Function: openai.ChatCompletionMessageToolCallFunction{Arguments: string(b)}},
+		},
+	}
+}
+
+func newTestExtractor(responses []openai.ChatCompletionMessage) *FastGraphExtractor {
+	e := NewFastGraphExtractor(&mockLLM{responses: responses})
+	e.BatchSize = utils.DefaultBatchSize
+	return e
+}
+
+// TestExtractGraphFromChunks_MapChunkIndex verifies that chunk_index in the
+// LLM response is mapped back to the correct ChunkIds on each entity/relation.
+func TestExtractGraphFromChunks_MapChunkIndex(t *testing.T) {
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "kb:file.txt:chunk-0", Content: "Alice works at Acme."},
+		{AssetId: "kb:file.txt:chunk-1", Content: "Bob founded Globex."},
+	}
+
+	llmResp := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "an employee", ChunkIndex: 0},
+			{Name: "Acme", Type: "organization", Desc: "a company", ChunkIndex: 0},
+			{Name: "Bob", Type: "person", Desc: "a founder", ChunkIndex: 1},
+			{Name: "Globex", Type: "organization", Desc: "another company", ChunkIndex: 1},
+		},
+		Relations: []models.GraphRelation{
+			{
+				Source:     models.RelativeEntity{Name: "Alice", Type: "person"},
+				Target:     models.RelativeEntity{Name: "Acme", Type: "organization"},
+				Desc:       "works at",
+				ChunkIndex: 0,
+			},
+			{
+				Source:     models.RelativeEntity{Name: "Bob", Type: "person"},
+				Target:     models.RelativeEntity{Name: "Globex", Type: "organization"},
+				Desc:       "founded",
+				ChunkIndex: 1,
+			},
+		},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{llmResp})
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person", "organization"}}
+
+	result, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// LLM must have been called exactly once for the whole batch
+	if e.LLM.(*mockLLM).callCount != 1 {
+		t.Errorf("expected 1 LLM call, got %d", e.LLM.(*mockLLM).callCount)
+	}
+
+	// Check entity ChunkIds
+	entityChunkIds := map[string]string{}
+	for _, ea := range result.EntityAssets {
+		if len(ea.ChunkIds) != 1 {
+			t.Errorf("entity %s: expected 1 ChunkId, got %d", ea.Name, len(ea.ChunkIds))
+		} else {
+			entityChunkIds[ea.Name] = ea.ChunkIds[0]
+		}
+	}
+
+	if entityChunkIds["alice"] != "kb:file.txt:chunk-0" {
+		t.Errorf("alice ChunkId = %q, want kb:file.txt:chunk-0", entityChunkIds["alice"])
+	}
+	if entityChunkIds["bob"] != "kb:file.txt:chunk-1" {
+		t.Errorf("bob ChunkId = %q, want kb:file.txt:chunk-1", entityChunkIds["bob"])
+	}
+
+	// Check relation ChunkIds
+	relationChunkIds := map[string]string{}
+	for _, ra := range result.RelationAssets {
+		if len(ra.ChunkIds) != 1 {
+			t.Errorf("relation %s→%s: expected 1 ChunkId, got %d", ra.Source, ra.Target, len(ra.ChunkIds))
+		} else {
+			key := ra.Source + "→" + ra.Target
+			relationChunkIds[key] = ra.ChunkIds[0]
+		}
+	}
+	if relationChunkIds["alice→acme"] != "kb:file.txt:chunk-0" {
+		t.Errorf("alice→acme ChunkId = %q, want kb:file.txt:chunk-0", relationChunkIds["alice→acme"])
+	}
+	if relationChunkIds["bob→globex"] != "kb:file.txt:chunk-1" {
+		t.Errorf("bob→globex ChunkId = %q, want kb:file.txt:chunk-1", relationChunkIds["bob→globex"])
+	}
+
+	// Check ChunkIds for organization entities
+	if entityChunkIds["acme"] != "kb:file.txt:chunk-0" {
+		t.Errorf("acme ChunkId = %q, want kb:file.txt:chunk-0", entityChunkIds["acme"])
+	}
+	if entityChunkIds["globex"] != "kb:file.txt:chunk-1" {
+		t.Errorf("globex ChunkId = %q, want kb:file.txt:chunk-1", entityChunkIds["globex"])
+	}
+}
+
+// TestExtractGraphFromChunks_InvalidChunkIndex verifies an out-of-range
+// chunk_index causes an error so the caller can retry.
+func TestExtractGraphFromChunks_InvalidChunkIndex(t *testing.T) {
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "kb:file.txt:chunk-0", Content: "Alice works at Acme."},
+	}
+	llmResp := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "an employee", ChunkIndex: 5}, // out of range
+		},
+		Relations: []models.GraphRelation{},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{llmResp})
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person"}}
+
+	_, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
+	if err == nil {
+		t.Fatal("expected error for out-of-range chunk_index, got nil")
+	}
+}
+
+// TestExtractGraphFromChunks_NegativeChunkIndex verifies a negative chunk_index causes an error.
+func TestExtractGraphFromChunks_NegativeChunkIndex(t *testing.T) {
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "kb:file.txt:chunk-0", Content: "Alice works at Acme."},
+	}
+	llmResp := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "an employee", ChunkIndex: -1},
+		},
+		Relations: []models.GraphRelation{},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{llmResp})
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person"}}
+
+	_, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
+	if err == nil {
+		t.Fatal("expected error for negative chunk_index, got nil")
+	}
+}
+
+// TestExtractGraphFromChunks_LLMError verifies that LLM errors propagate correctly.
+func TestExtractGraphFromChunks_LLMError(t *testing.T) {
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "kb:file.txt:chunk-0", Content: "Alice works at Acme."},
+	}
+
+	e := NewFastGraphExtractor(&mockLLM{errToReturn: errors.New("rate limit exceeded")})
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person"}}
+
+	_, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
+	if err == nil {
+		t.Fatal("expected error from LLM, got nil")
+	}
+	if err.Error() != "rate limit exceeded" {
+		t.Errorf("error = %q, want %q", err.Error(), "rate limit exceeded")
+	}
+}
+
+// TestExtractGraph_BatchesChunks verifies that ExtractGraph splits N chunks into
+// ceil(N/BatchSize) LLM calls and merges all entities/relations correctly.
+func TestExtractGraph_BatchesChunks(t *testing.T) {
+	// BatchSize=2, 5 chunks → 3 LLM calls (batches of 2, 2, 1)
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "c0", Content: "chunk 0"},
+		{AssetId: "c1", Content: "chunk 1"},
+		{AssetId: "c2", Content: "chunk 2"},
+		{AssetId: "c3", Content: "chunk 3"},
+		{AssetId: "c4", Content: "chunk 4"},
+	}
+
+	// batch 0: entities Alice(c0), Bob(c1) + relation
+	batch0 := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "p", ChunkIndex: 0},
+			{Name: "Bob",   Type: "person", Desc: "p", ChunkIndex: 1},
+		},
+		Relations: []models.GraphRelation{
+			{Source: models.RelativeEntity{Name: "Alice", Type: "person"}, Target: models.RelativeEntity{Name: "Bob", Type: "person"}, Desc: "knows", ChunkIndex: 0},
+		},
+	})
+	// batch 1: entity Carol(c2), Dave(c3)
+	batch1 := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Carol", Type: "person", Desc: "p", ChunkIndex: 0},
+			{Name: "Dave",  Type: "person", Desc: "p", ChunkIndex: 1},
+		},
+		Relations: []models.GraphRelation{
+			{Source: models.RelativeEntity{Name: "Carol", Type: "person"}, Target: models.RelativeEntity{Name: "Dave", Type: "person"}, Desc: "knows", ChunkIndex: 0},
+		},
+	})
+	// batch 2: entity Eve(c4)
+	batch2 := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Eve", Type: "person", Desc: "p", ChunkIndex: 0},
+		},
+		Relations: []models.GraphRelation{},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{batch0, batch1, batch2})
+	e.BatchSize = 2
+	e.MaxConcurrent = 1 // serial for deterministic call count in tests
+
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person"}}
+	result, err := e.ExtractGraph(context.Background(), chunks, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if e.LLM.(*mockLLM).callCount != 3 {
+		t.Errorf("expected 3 LLM calls (3 batches), got %d", e.LLM.(*mockLLM).callCount)
+	}
+
+	if len(result.EntityAssets) != 5 {
+		t.Errorf("expected 5 entities, got %d", len(result.EntityAssets))
+	}
+
+	// Verify ChunkIds map back to the original chunk AssetIds
+	entityChunkMap := map[string]string{}
+	for _, ea := range result.EntityAssets {
+		entityChunkMap[ea.Name] = ea.ChunkIds[0]
+	}
+	if entityChunkMap["alice"] != "c0" {
+		t.Errorf("alice ChunkId = %q, want c0", entityChunkMap["alice"])
+	}
+	if entityChunkMap["bob"] != "c1" {
+		t.Errorf("bob ChunkId = %q, want c1", entityChunkMap["bob"])
+	}
+	if entityChunkMap["carol"] != "c2" {
+		t.Errorf("carol ChunkId = %q, want c2", entityChunkMap["carol"])
+	}
+	if entityChunkMap["dave"] != "c3" {
+		t.Errorf("dave ChunkId = %q, want c3", entityChunkMap["dave"])
+	}
+	if entityChunkMap["eve"] != "c4" {
+		t.Errorf("eve ChunkId = %q, want c4", entityChunkMap["eve"])
+	}
+}
+
+// TestExtractGraphFromChunks_InfersUndeclaredEntity verifies that when the LLM returns a
+// relation referencing an entity not in the entities list, the entity is auto-created
+// using context extracted from the source chunk, and the relation is preserved.
+func TestExtractGraphFromChunks_InfersUndeclaredEntity(t *testing.T) {
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "kb:file.txt:chunk-0", Content: "Alice works at Acme. Acme is a company founded in 1990."},
+	}
+
+	// LLM forgot to declare "Acme" in entities but referenced it in a relation
+	llmResp := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "an employee", ChunkIndex: 0},
+		},
+		Relations: []models.GraphRelation{
+			{
+				Source:     models.RelativeEntity{Name: "Alice", Type: "person"},
+				Target:     models.RelativeEntity{Name: "Acme", Type: "organization"},
+				Desc:       "works at",
+				ChunkIndex: 0,
+			},
+		},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{llmResp})
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person", "organization"}}
+
+	result, err := e.ExtractGraphFromChunks(context.Background(), chunks, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// relation must be preserved
+	if len(result.RelationAssets) != 1 {
+		t.Fatalf("expected 1 relation, got %d", len(result.RelationAssets))
+	}
+	if result.RelationAssets[0].Target != "acme" {
+		t.Errorf("relation target = %q, want acme", result.RelationAssets[0].Target)
+	}
+
+	// inferred entity must exist with correct ChunkId
+	entityMap := map[string]models.EntityAsset{}
+	for _, ea := range result.EntityAssets {
+		entityMap[ea.Name] = ea
+	}
+	acme, ok := entityMap["acme"]
+	if !ok {
+		t.Fatal("expected inferred entity 'acme', not found")
+	}
+	if acme.ChunkIds[0] != "kb:file.txt:chunk-0" {
+		t.Errorf("acme ChunkId = %q, want kb:file.txt:chunk-0", acme.ChunkIds[0])
+	}
+	// description should be extracted from chunk content (contains "Acme")
+	if acme.Description == "" {
+		t.Errorf("expected non-empty description for inferred entity 'acme', got empty")
+	}
+}
+
+// TestExtractEntityContext verifies the rune-safe context extraction helper.
+func TestExtractEntityContext(t *testing.T) {
+	cases := []struct {
+		name        string
+		content     string
+		entity      string
+		wantFound   bool
+	}{
+		{"ascii match", "Alice works at Acme corp.", "acme", true},
+		{"thai match", "พนักงานมีสิทธิ์ลา การลาพักผ่อนประจำปี ไม่เกิน 10 วัน", "การลาพักผ่อนประจำปี", true},
+		{"no match", "Alice works at Acme.", "globex", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractEntityContext(tc.content, tc.entity)
+			if tc.wantFound && got == "" {
+				t.Errorf("expected non-empty context for entity %q in %q", tc.entity, tc.content)
+			}
+			if !tc.wantFound && got != "" {
+				t.Errorf("expected empty context for entity %q, got %q", tc.entity, got)
+			}
+		})
+	}
+}
+
+// TestExtractGraph_EmptyChunks verifies ExtractGraph handles an empty input without error.
+func TestExtractGraph_EmptyChunks(t *testing.T) {
+	e := newTestExtractor(nil)
+	result, err := e.ExtractGraph(context.Background(), []asset_manager.ContextualAsset{}, GraphExtractionOptions{Domain: "test"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.EntityAssets) != 0 || len(result.RelationAssets) != 0 {
+		t.Errorf("expected empty result, got entities=%d relations=%d", len(result.EntityAssets), len(result.RelationAssets))
+	}
+}
+
+// TestDeduplicateRelationsBatch_Basic verifies two groups are merged in one LLM call.
+func TestDeduplicateRelationsBatch_Basic(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "collaborated with", ChunkIds: []string{"c1"}},
+		},
+		{
+			{Source: "acme", SourceType: "organization", Target: "globex", TargetType: "organization", Description: "partner of", ChunkIds: []string{"c2"}},
+			{Source: "acme", SourceType: "organization", Target: "globex", TargetType: "organization", Description: "strategic alliance", ChunkIds: []string{"c3"}},
+		},
+	}
+
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "works and collaborates with", Indices: []int{0, 1}},
+				},
+			},
+			{
+				GroupId: 1,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "acme", Type: "organization"}, Target: models.RelativeEntity{Name: "globex", Type: "organization"}, Desc: "partner and strategic ally", Indices: []int{0, 1}},
+				},
+			},
+		},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	results, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 group results, got %d", len(results))
+	}
+	if len(results[0]) != 1 {
+		t.Errorf("group 0: expected 1 merged relation, got %d", len(results[0]))
+	}
+	if len(results[1]) != 1 {
+		t.Errorf("group 1: expected 1 merged relation, got %d", len(results[1]))
+	}
+	if len(results[0][0].ChunkIds) != 2 {
+		t.Errorf("group 0 ChunkIds: want 2, got %d", len(results[0][0].ChunkIds))
+	}
+	if e.LLM.(*mockLLM).callCount != 1 {
+		t.Errorf("expected 1 LLM call, got %d", e.LLM.(*mockLLM).callCount)
+	}
+}
+
+// TestDeduplicateRelationsBatch_Empty verifies nil input returns nil without calling LLM.
+func TestDeduplicateRelationsBatch_Empty(t *testing.T) {
+	e := newTestExtractor(nil)
+	results, err := e.DeduplicateRelationsBatch(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if results != nil {
+		t.Errorf("expected nil results for empty input, got %v", results)
+	}
+	if e.LLM.(*mockLLM).callCount != 0 {
+		t.Errorf("expected 0 LLM calls for empty input, got %d", e.LLM.(*mockLLM).callCount)
+	}
+}
+
+// TestDeduplicateRelationsBatch_InvalidGroupId verifies an out-of-range group_id causes an error.
+func TestDeduplicateRelationsBatch_InvalidGroupId(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "knows", ChunkIds: []string{"c1"}},
+		},
+	}
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 99,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "...", Indices: []int{0}},
+				},
+			},
+		},
+	})
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error for invalid group_id, got nil")
+	}
+}
+
+// TestDeduplicateRelationsBatch_MissingGroup verifies an error when a group_id is absent from the response.
+func TestDeduplicateRelationsBatch_MissingGroup(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "knows", ChunkIds: []string{"c1"}},
+		},
+		{
+			{Source: "acme", SourceType: "organization", Target: "globex", TargetType: "organization", Description: "partner of", ChunkIds: []string{"c2"}},
+			{Source: "acme", SourceType: "organization", Target: "globex", TargetType: "organization", Description: "ally", ChunkIds: []string{"c3"}},
+		},
+	}
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "...", Indices: []int{0, 1}},
+				},
+			},
+		},
+	})
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error when group missing from response, got nil")
+	}
+}
+
+// TestDeduplicateRelationsBatch_InvalidRelationIndex verifies an out-of-range index within a cluster causes an error.
+func TestDeduplicateRelationsBatch_InvalidRelationIndex(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "knows", ChunkIds: []string{"c1"}},
+		},
+	}
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "...", Indices: []int{0, 99}},
+				},
+			},
+		},
+	})
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error for out-of-range relation index, got nil")
+	}
+}
+
+// TestDeduplicateRelationsBatch_EmptyInnerGroup verifies an empty inner group slice causes an error.
+func TestDeduplicateRelationsBatch_EmptyInnerGroup(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{}, // empty group
+	}
+	e := newTestExtractor(nil)
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error for empty inner group, got nil")
+	}
+	if e.LLM.(*mockLLM).callCount != 0 {
+		t.Errorf("expected 0 LLM calls for empty group, got %d", e.LLM.(*mockLLM).callCount)
+	}
+}
+
+// TestDeduplicateRelationsBatch_DuplicateGroupId verifies duplicate group_id in LLM response causes an error.
+func TestDeduplicateRelationsBatch_DuplicateGroupId(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "knows", ChunkIds: []string{"c1"}},
+		},
+	}
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "first", Indices: []int{0}},
+				},
+			},
+			{
+				GroupId: 0, // duplicate
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "second", Indices: []int{1}},
+				},
+			},
+		},
+	})
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error for duplicate group_id, got nil")
+	}
+}
+
+// TestExtractGraph_BatchedDedup verifies ExtractGraph uses one dedup LLM call for a
+// pair group with >1 relation, and that single-relation groups bypass LLM entirely.
+func TestExtractGraph_BatchedDedup(t *testing.T) {
+	// 1 chunk with 2 entities and 2 relations for the same pair (alice→bob)
+	// plus 1 single-relation pair (carol→dave) that must NOT trigger a dedup call.
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "c0", Content: "Alice works with Bob. Carol manages Dave."},
+	}
+
+	extractionResp := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "employee", ChunkIndex: 0},
+			{Name: "Bob", Type: "person", Desc: "employee", ChunkIndex: 0},
+			{Name: "Carol", Type: "person", Desc: "manager", ChunkIndex: 0},
+			{Name: "Dave", Type: "person", Desc: "employee", ChunkIndex: 0},
+		},
+		Relations: []models.GraphRelation{
+			{Source: models.RelativeEntity{Name: "Alice", Type: "person"}, Target: models.RelativeEntity{Name: "Bob", Type: "person"}, Desc: "works with", ChunkIndex: 0},
+			{Source: models.RelativeEntity{Name: "Alice", Type: "person"}, Target: models.RelativeEntity{Name: "Bob", Type: "person"}, Desc: "collaborates with", ChunkIndex: 0},
+			{Source: models.RelativeEntity{Name: "Carol", Type: "person"}, Target: models.RelativeEntity{Name: "Dave", Type: "person"}, Desc: "manages", ChunkIndex: 0},
+		},
+	})
+
+	dedupResp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {
+						Source:  models.RelativeEntity{Name: "Alice", Type: "person"},
+						Target:  models.RelativeEntity{Name: "Bob", Type: "person"},
+						Desc:    "works and collaborates with",
+						Indices: []int{0, 1},
+					},
+				},
+			},
+		},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{extractionResp, dedupResp})
+	e.BatchSize = 1
+	e.MaxConcurrent = 1
+	e.DedupBatchSize = 10 // both groups fit in one dedup call
+
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person"}}
+	result, err := e.ExtractGraph(context.Background(), chunks, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 1 extraction call + 1 dedup call (for the alice-bob pair) = 2 total
+	if e.LLM.(*mockLLM).callCount != 2 {
+		t.Errorf("expected 2 LLM calls, got %d", e.LLM.(*mockLLM).callCount)
+	}
+
+	// alice-bob pair merged to 1 relation; carol-dave passes through = 2 total relations
+	if len(result.RelationAssets) != 2 {
+		t.Errorf("expected 2 relations, got %d", len(result.RelationAssets))
+	}
+
+	// the merged alice-bob relation should reference both source chunks
+	var aliceBobRel *models.RelationAsset
+	for i := range result.RelationAssets {
+		r := &result.RelationAssets[i]
+		if r.Source == "alice" && r.Target == "bob" {
+			aliceBobRel = r
+			break
+		}
+	}
+	if aliceBobRel == nil {
+		t.Fatal("expected alice→bob relation in output, not found")
+	}
+	if len(aliceBobRel.ChunkIds) != 2 {
+		t.Errorf("alice→bob ChunkIds: want 2, got %d", len(aliceBobRel.ChunkIds))
+	}
+}

@@ -8,9 +8,10 @@ import (
 )
 
 type GraphEntity struct {
-	Name string `json:"name" jsonschema:"The name of the entity"`
-	Type string `json:"type" jsonschema:"The type of the entity"`
-	Desc string `json:"desc" jsonschema:"The description for the entity context"`
+	Name       string `json:"name"        jsonschema:"The name of the entity"`
+	Type       string `json:"type"        jsonschema:"The type of the entity"`
+	Desc       string `json:"desc"        jsonschema:"The description for the entity context"`
+	ChunkIndex int    `json:"chunk_index" jsonschema:"Zero-based index of the source chunk in the input batch"`
 }
 
 type RelativeEntity struct {
@@ -19,9 +20,10 @@ type RelativeEntity struct {
 }
 
 type GraphRelation struct {
-	Source RelativeEntity `json:"source" jsonschema:"The source of the relation"`
-	Target RelativeEntity `json:"target" jsonschema:"The target of the relation"`
-	Desc   string `json:"desc" jsonschema:"The description for the relation context"`
+	Source     RelativeEntity `json:"source"      jsonschema:"The source of the relation"`
+	Target     RelativeEntity `json:"target"      jsonschema:"The target of the relation"`
+	Desc       string         `json:"desc"        jsonschema:"The description for the relation context"`
+	ChunkIndex int            `json:"chunk_index" jsonschema:"Zero-based index of the source chunk in the input batch"`
 }
 
 type ExtractedGraph struct {
@@ -54,6 +56,25 @@ func GetRelationClusterTool() (openai.ChatCompletionToolParam, error) {
 	name := "relation_cluster"
 	description := "Cluster relations based on semantic similarity"
 	tool, err := utils.StructToTool[RelationClusters](name, description)
+	if err != nil {
+		return openai.ChatCompletionToolParam{}, err
+	}
+	return tool, nil
+}
+
+type PairGroupResult struct {
+	GroupId  int                      `json:"group_id"  jsonschema:"The 0-based index of this group, matching the GROUP N label in the input"`
+	Clusters map[string]RelationGroup `json:"clusters"  jsonschema:"Map of relation clusters for this group, key is cluster id"`
+}
+
+type BatchRelationClusters struct {
+	Groups []PairGroupResult `json:"groups" jsonschema:"Array of results, one per input GROUP; every GROUP N in the input must appear here"`
+}
+
+func GetBatchRelationClusterTool() (openai.ChatCompletionToolParam, error) {
+	name := "batch_relation_cluster"
+	description := "Cluster relations for multiple entity pairs at once; one entry per GROUP in the input"
+	tool, err := utils.StructToTool[BatchRelationClusters](name, description)
 	if err != nil {
 		return openai.ChatCompletionToolParam{}, err
 	}
