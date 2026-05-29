@@ -94,3 +94,29 @@ index,source_name,source_type,target_name,target_type,desc
 %s
 <<RELATIONS_END>>
 `
+
+const DeduplicateBatchRelationsSystem = `### **BATCH RELATION DEDUPLICATION & CONTEXT CLUSTERING**
+
+**Goal**: For each GROUP in the input, cluster relationships between the same entity pair into semantic groups. Process each GROUP independently.
+
+**Instructions**:
+1. **Scope**: Each GROUP contains relations between one specific entity pair. Process each GROUP independently.
+2. **Contextual Split**:
+   * **Merge**: "X founded Y" and "Y was started by X" (same semantic context).
+   * **Separate**: "X works at Y" and "X sued Y" (different contexts).
+3. **Synthesis**: For each cluster, write one clear, comprehensive description.
+4. **group_id**: Each entry in your output "groups" array must have a "group_id" matching the GROUP N number from the input.
+
+**Schema**:
+* Input: multiple GROUPs, each labeled GROUP N with a local 0-based CSV of relations.
+* Output: {"groups": [{"group_id": N, "clusters": {"key": {"source": {...}, "target": {...}, "desc": "...", "indices": [...]}}}, ...]}
+
+**Constraint**: Return ALL groups — every GROUP N in the input must appear in "groups". Preserve original entity names and types exactly. Return valid JSON only.
+`
+
+const DeduplicateBatchRelationsPrompt = `
+# INPUT DATA
+<<RELATIONS_START>>
+%s
+<<RELATIONS_END>>
+`
