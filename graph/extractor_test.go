@@ -571,3 +571,80 @@ func TestDeduplicateRelationsBatch_DuplicateGroupId(t *testing.T) {
 		t.Fatal("expected error for duplicate group_id, got nil")
 	}
 }
+
+// TestExtractGraph_BatchedDedup verifies ExtractGraph uses one dedup LLM call for a
+// pair group with >1 relation, and that single-relation groups bypass LLM entirely.
+func TestExtractGraph_BatchedDedup(t *testing.T) {
+	// 1 chunk with 2 entities and 2 relations for the same pair (alice→bob)
+	// plus 1 single-relation pair (carol→dave) that must NOT trigger a dedup call.
+	chunks := []asset_manager.ContextualAsset{
+		{AssetId: "c0", Content: "Alice works with Bob. Carol manages Dave."},
+	}
+
+	extractionResp := toolCallMsg(models.ExtractedGraph{
+		Entities: []models.GraphEntity{
+			{Name: "Alice", Type: "person", Desc: "employee", ChunkIndex: 0},
+			{Name: "Bob", Type: "person", Desc: "employee", ChunkIndex: 0},
+			{Name: "Carol", Type: "person", Desc: "manager", ChunkIndex: 0},
+			{Name: "Dave", Type: "person", Desc: "employee", ChunkIndex: 0},
+		},
+		Relations: []models.GraphRelation{
+			{Source: models.RelativeEntity{Name: "Alice", Type: "person"}, Target: models.RelativeEntity{Name: "Bob", Type: "person"}, Desc: "works with", ChunkIndex: 0},
+			{Source: models.RelativeEntity{Name: "Alice", Type: "person"}, Target: models.RelativeEntity{Name: "Bob", Type: "person"}, Desc: "collaborates with", ChunkIndex: 0},
+			{Source: models.RelativeEntity{Name: "Carol", Type: "person"}, Target: models.RelativeEntity{Name: "Dave", Type: "person"}, Desc: "manages", ChunkIndex: 0},
+		},
+	})
+
+	dedupResp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {
+						Source:  models.RelativeEntity{Name: "Alice", Type: "person"},
+						Target:  models.RelativeEntity{Name: "Bob", Type: "person"},
+						Desc:    "works and collaborates with",
+						Indices: []int{0, 1},
+					},
+				},
+			},
+		},
+	})
+
+	e := newTestExtractor([]openai.ChatCompletionMessage{extractionResp, dedupResp})
+	e.BatchSize = 1
+	e.MaxConcurrent = 1
+	e.DedupBatchSize = 10 // both groups fit in one dedup call
+
+	opts := GraphExtractionOptions{Domain: "test", EntityTypes: []string{"person"}}
+	result, err := e.ExtractGraph(context.Background(), chunks, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 1 extraction call + 1 dedup call (for the alice-bob pair) = 2 total
+	if e.LLM.(*mockLLM).callCount != 2 {
+		t.Errorf("expected 2 LLM calls, got %d", e.LLM.(*mockLLM).callCount)
+	}
+
+	// alice-bob pair merged to 1 relation; carol-dave passes through = 2 total relations
+	if len(result.RelationAssets) != 2 {
+		t.Errorf("expected 2 relations, got %d", len(result.RelationAssets))
+	}
+
+	// the merged alice-bob relation should reference both source chunks
+	var aliceBobRel *models.RelationAsset
+	for i := range result.RelationAssets {
+		r := &result.RelationAssets[i]
+		if r.Source == "alice" && r.Target == "bob" {
+			aliceBobRel = r
+			break
+		}
+	}
+	if aliceBobRel == nil {
+		t.Fatal("expected alice→bob relation in output, not found")
+	}
+	if len(aliceBobRel.ChunkIds) != 2 {
+		t.Errorf("alice→bob ChunkIds: want 2, got %d", len(aliceBobRel.ChunkIds))
+	}
+}

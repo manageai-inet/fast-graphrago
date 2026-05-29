@@ -160,65 +160,86 @@ func (f *FastGraphExtractor) ExtractGraph(ctx context.Context, chunks []asset_ma
 		entityAssets = append(entityAssets, entity)
 	}
 
-	logger.DebugContext(ctx, "deduping relations", slog.Int("relations", len(relationAssetsGroup)))
+	logger.DebugContext(ctx, "deduping relations", slog.Int("relation_groups", len(relationAssetsGroup)))
 	relationAssets := []models.RelationAsset{}
+
+	// Separate single-relation groups (no LLM needed) from multi-relation groups.
+	var needsDedup [][]models.RelationAsset
+	for _, relGroup := range relationAssetsGroup {
+		if len(relGroup) > 1 {
+			needsDedup = append(needsDedup, relGroup)
+		} else {
+			relationAssets = append(relationAssets, relGroup[0])
+		}
+	}
+
+	dedupBatchSize := f.DedupBatchSize
+	if dedupBatchSize <= 0 {
+		dedupBatchSize = utils.DefaultDedupBatchSize
+	}
+
 	var dedupWg sync.WaitGroup
+	numSubBatches := (len(needsDedup) + dedupBatchSize - 1) / dedupBatchSize
 	dedupSem := make(chan struct{}, f.MaxConcurrent)
-	dedupErrChan := make(chan error, len(relationAssetsGroup))
-	for rk, relationWithSameKey := range relationAssetsGroup {
+	dedupErrChan := make(chan error, max(numSubBatches, 1))
+
+	for start := 0; start < len(needsDedup); start += dedupBatchSize {
+		end := min(start+dedupBatchSize, len(needsDedup))
+		groups := needsDedup[start:end]
+
 		dedupWg.Add(1)
 		dedupSem <- struct{}{}
-		go func(relGroup []models.RelationAsset) {
+		go func(groups [][]models.RelationAsset) {
 			defer dedupWg.Done()
 			defer func() { <-dedupSem }()
 
-			if len(relGroup) > 1 {
-				var newRelations []models.RelationAsset
-				var err error
-				for i := 0; i < f.MaxRetryAttempt; i++ {
-					logger.Debug("deduping relations in a group", slog.String("relationGroupKey", rk), slog.Int("relations", len(relGroup)), slog.Int("attempt", i+1))
-					newRelations, err = f.DeduplicateRelations(ctx, relGroup)
-					if err == nil {
-						isFailed := false
-						for _, relation := range newRelations {
-							sourceKey := relation.Source + "|" + relation.SourceType
-							targetKey := relation.Target + "|" + relation.TargetType
-							if _, ok := entityKeyToId[sourceKey]; !ok {
-								if i == f.MaxRetryAttempt-1 {
-									err = fmt.Errorf("relation bind to source entity %s which is not found", sourceKey)
-								}
-								isFailed = true
+			maxAttempt := max(f.MaxRetryAttempt, 1)
+			var results [][]models.RelationAsset
+			var err error
+			for attempt := 0; attempt < maxAttempt; attempt++ {
+				logger.DebugContext(ctx, "batch deduping relations", slog.Int("groups", len(groups)), slog.Int("attempt", attempt+1))
+				results, err = f.DeduplicateRelationsBatch(ctx, groups)
+				if err != nil {
+					logger.Warn("batch dedup failed: "+err.Error(), slog.Int("attempt", attempt+1))
+					continue
+				}
+				valid := true
+				for _, relGroup := range results {
+					for _, relation := range relGroup {
+						if _, ok := entityKeyToId[relation.Source+"|"+relation.SourceType]; !ok {
+							if attempt == maxAttempt-1 {
+								err = fmt.Errorf("relation source entity %s|%s not found", relation.Source, relation.SourceType)
 							}
-							if _, ok := entityKeyToId[targetKey]; !ok {
-								if i == f.MaxRetryAttempt-1 {
-									err = fmt.Errorf("relation bind to target entity %s which is not found", targetKey)
-								}
-								isFailed = true
+							valid = false
+						}
+						if _, ok := entityKeyToId[relation.Target+"|"+relation.TargetType]; !ok {
+							if attempt == maxAttempt-1 {
+								err = fmt.Errorf("relation target entity %s|%s not found", relation.Target, relation.TargetType)
 							}
+							valid = false
 						}
-						if !isFailed {
-							break
-						} else {
-							logger.Warn("deduping relations failed", slog.String("error", err.Error()))
-						}
-					} else {
-						logger.Warn("deduping relations failed", slog.String("error", err.Error()))
 					}
 				}
-				if err != nil {
-					dedupErrChan <- err
-					return
+				if valid {
+					break
 				}
-				mu.Lock()
-				relationAssets = append(relationAssets, newRelations...)
-				mu.Unlock()
-			} else {
-				mu.Lock()
-				relationAssets = append(relationAssets, relGroup[0])
-				mu.Unlock()
+				if err == nil {
+					err = fmt.Errorf("entity validation failed for dedup batch")
+				}
+				logger.Warn("batch dedup entity validation failed: "+err.Error(), slog.Int("attempt", attempt+1))
 			}
-		}(relationWithSameKey)
+			if err != nil {
+				dedupErrChan <- err
+				return
+			}
+			mu.Lock()
+			for _, relGroup := range results {
+				relationAssets = append(relationAssets, relGroup...)
+			}
+			mu.Unlock()
+		}(groups)
 	}
+
 	doneDedup := make(chan struct{})
 	go func() {
 		dedupWg.Wait()
