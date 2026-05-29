@@ -525,3 +525,49 @@ func TestDeduplicateRelationsBatch_InvalidRelationIndex(t *testing.T) {
 		t.Fatal("expected error for out-of-range relation index, got nil")
 	}
 }
+
+// TestDeduplicateRelationsBatch_EmptyInnerGroup verifies an empty inner group slice causes an error.
+func TestDeduplicateRelationsBatch_EmptyInnerGroup(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{}, // empty group
+	}
+	e := newTestExtractor(nil)
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error for empty inner group, got nil")
+	}
+	if e.LLM.(*mockLLM).callCount != 0 {
+		t.Errorf("expected 0 LLM calls for empty group, got %d", e.LLM.(*mockLLM).callCount)
+	}
+}
+
+// TestDeduplicateRelationsBatch_DuplicateGroupId verifies duplicate group_id in LLM response causes an error.
+func TestDeduplicateRelationsBatch_DuplicateGroupId(t *testing.T) {
+	groups := [][]models.RelationAsset{
+		{
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "works with", ChunkIds: []string{"c0"}},
+			{Source: "alice", SourceType: "person", Target: "bob", TargetType: "person", Description: "knows", ChunkIds: []string{"c1"}},
+		},
+	}
+	resp := toolCallMsg(models.BatchRelationClusters{
+		Groups: []models.PairGroupResult{
+			{
+				GroupId: 0,
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "first", Indices: []int{0}},
+				},
+			},
+			{
+				GroupId: 0, // duplicate
+				Clusters: map[string]models.RelationGroup{
+					"g0": {Source: models.RelativeEntity{Name: "alice", Type: "person"}, Target: models.RelativeEntity{Name: "bob", Type: "person"}, Desc: "second", Indices: []int{1}},
+				},
+			},
+		},
+	})
+	e := newTestExtractor([]openai.ChatCompletionMessage{resp})
+	_, err := e.DeduplicateRelationsBatch(context.Background(), groups)
+	if err == nil {
+		t.Fatal("expected error for duplicate group_id, got nil")
+	}
+}

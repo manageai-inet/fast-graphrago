@@ -310,6 +310,9 @@ func (f *FastGraphExtractor) DeduplicateRelationsBatch(ctx context.Context, grou
 
 	var sb strings.Builder
 	for gi, group := range groups {
+		if len(group) == 0 {
+			return nil, fmt.Errorf("group %d is empty", gi)
+		}
 		src := group[0].Source + "|" + group[0].SourceType
 		tgt := group[0].Target + "|" + group[0].TargetType
 		fmt.Fprintf(&sb, "GROUP %d (%s → %s):\n", gi, src, tgt)
@@ -343,6 +346,9 @@ func (f *FastGraphExtractor) DeduplicateRelationsBatch(ctx context.Context, grou
 		gi := groupResult.GroupId
 		if gi < 0 || gi >= len(groups) {
 			return nil, fmt.Errorf("invalid group_id %d in LLM response (batch has %d groups)", gi, len(groups))
+		}
+		if results[gi] != nil {
+			return nil, fmt.Errorf("duplicate group_id %d in LLM response", gi)
 		}
 		srcGroup := groups[gi]
 		newRelations := make([]models.RelationAsset, 0, len(groupResult.Clusters))
