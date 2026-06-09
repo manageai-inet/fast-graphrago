@@ -25,12 +25,6 @@ import (
 
 const LogNoNewChunksBypassExtraction = "No new chunks found, bypassing extraction"
 
-type ImmediatePage struct {
-	ID       string         `json:"id"`
-	Content  string         `json:"content"`
-	Metadata map[string]any `json:"metadata,omitempty"`
-}
-
 type EntityMetadata struct {
 	EntityName  string   `json:"entity_name"`
 	EntityType  string   `json:"entity_type"`
@@ -136,6 +130,103 @@ func (g *GraphRAGServiceImpl) SetLogger(logger *slog.Logger) {
 	g.GraphExtractor.SetLogger(logger)
 }
 
+func preparePageAssets(serviceName, kbId, filename string, version int, sources []asset_manager.KnowledgeSource, labels *[]string, seedAsset *asset_manager.ContextualAsset) ([]asset_manager.ContextualAsset, error) {
+	pageAssets := make([]asset_manager.ContextualAsset, 0, len(sources))
+	for i, source := range sources {
+		if source.SourceName == "" {
+			return nil, fmt.Errorf("page source of kbId %s at position %d has empty source name", kbId, i)
+		}
+		if source.SourceContents == nil || *source.SourceContents == "" {
+			return nil, fmt.Errorf("page source name %s of kbId %s at position %d has empty source contents", source.SourceName, kbId, i)
+		}
+		pageId := fmt.Sprintf("%s:%s:%d", kbId, filename, i)
+		pageRefs := []asset_manager.AssetRef{
+			{
+				KbId:      kbId,
+				AssetId:   seedAsset.AssetId,
+				AssetType: asset_manager.AssetTypeDocument,
+				RefType:   asset_manager.AssetRefTypeParent,
+			},
+		}
+		pageAssets = append(pageAssets, asset_manager.ContextualAsset{
+			IndexedBy: serviceName,
+			KbId:      kbId,
+			AssetType: asset_manager.AssetTypePage,
+			AssetId:   pageId,
+			Version:   version,
+			Content:   *source.SourceContents,
+			Metadata:  source.Metadata,
+			Labels:    labels,
+			Refs:      &pageRefs,
+		})
+		*seedAsset.Refs = append(*seedAsset.Refs, asset_manager.AssetRef{
+			KbId:      kbId,
+			AssetId:   pageId,
+			AssetType: asset_manager.AssetTypePage,
+			RefType:   asset_manager.AssetRefTypeChild,
+		})
+	}
+	return pageAssets, nil
+}
+
+func prepareChunkAssets(serviceName, kbId string, version int, chunks []chunk.ChunkImmediateAsset, pageAssets []asset_manager.ContextualAsset) ([]asset_manager.ContextualAsset, error) {
+	chunkAssets := make([]asset_manager.ContextualAsset, 0, len(chunks))
+	for _, c := range chunks {
+		pageNumber := c.PageNumber
+		if pageNumber >= len(pageAssets) {
+			return nil, fmt.Errorf("page asset not found for page number %d (page assets length: %d)", pageNumber, len(pageAssets))
+		}
+		pageRefs := pageAssets[pageNumber].Refs
+		if pageRefs == nil {
+			refs := []asset_manager.AssetRef{}
+			pageRefs = &refs
+			pageAssets[pageNumber].Refs = pageRefs
+		}
+		page := pageAssets[pageNumber]
+		refs := []asset_manager.AssetRef{
+			{
+				KbId:      kbId,
+				AssetId:   page.AssetId,
+				AssetType: page.AssetType,
+				RefType:   asset_manager.AssetRefTypeParent,
+			},
+		}
+		chunkId := fmt.Sprintf("%s[%d:%d]", page.AssetId, c.StartPos, c.StartPos+len(c.Content))
+		chunkAssets = append(chunkAssets, asset_manager.ContextualAsset{
+			IndexedBy: serviceName,
+			KbId:      kbId,
+			AssetType: asset_manager.AssetTypeChunk,
+			AssetId:   chunkId,
+			Version:   version,
+			Content:   c.Content,
+			Metadata:  c.Metadata,
+			Refs:      &refs,
+		})
+		*pageRefs = append(*pageRefs, asset_manager.AssetRef{
+			KbId:      kbId,
+			AssetId:   chunkId,
+			AssetType: asset_manager.AssetTypeChunk,
+			RefType:   asset_manager.AssetRefTypeChild,
+		})
+	}
+	return chunkAssets, nil
+}
+
+func dedupeContextualAssetsByID(assets []asset_manager.ContextualAsset) ([]asset_manager.ContextualAsset, map[string]asset_manager.ContextualAsset, []string) {
+	deduped := make([]asset_manager.ContextualAsset, 0, len(assets))
+	byID := make(map[string]asset_manager.ContextualAsset, len(assets))
+	duplicates := make([]string, 0)
+	for _, asset := range assets {
+		if _, exists := byID[asset.AssetId]; exists {
+			duplicates = append(duplicates, asset.AssetId)
+			continue
+		}
+		byID[asset.AssetId] = asset
+		deduped = append(deduped, asset)
+	}
+	return deduped, byID, duplicates
+}
+
 func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []asset_manager.KnowledgeSource, labels *[]string, metadata *map[string]any, config *map[string]any) ([]asset_manager.ContextualAsset, []asset_manager.VectorAsset, error) {
 	logger := asset_manager.GetLogger(&g.LoggingCapacity)
 	logger.InfoContext(ctx, "starting to index", slog.String("kbId", kbId), slog.Int("sources", len(sources)))
@@ -170,53 +261,10 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 	logger.DebugContext(ctx, "indexing new version from seed asset", slog.String("kbId", kbId), slog.Int("version", tsVersion), slog.String("filename", filename), slog.Int("pages", len(sources)))
 
 	// 1. Prepare documents
-	pages := []ImmediatePage{}
-	pageAssetsMap := map[string]asset_manager.ContextualAsset{}
-	for i, source := range sources {
-		if source.SourceName == "" {
-			msg := fmt.Sprintf("page source of kbId %s at position %d has empty source name", kbId, i)
-			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
-		}
-		if source.SourceContents == nil || *source.SourceContents == "" {
-			msg := fmt.Sprintf("page source name %s of kbId %s at position %d has empty source contents", source.SourceName, kbId, i)
-			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
-		}
-		pageId := fmt.Sprintf("%s:%s:%d", kbId, filename, i)
-		pages = append(pages, ImmediatePage{
-			ID:       pageId,
-			Content:  *source.SourceContents,
-			Metadata: *source.Metadata,
-		})
-		pageAssetsMap[pageId] = asset_manager.ContextualAsset{
-			IndexedBy: g.serviceName,
-			KbId:      kbId,
-			AssetType: asset_manager.AssetTypePage,
-			AssetId:   pageId, // kbid:filename.ext:n
-			Version:   tsVersion,
-			Content:   *source.SourceContents,
-			Metadata:  source.Metadata,
-			Labels:    labels,
-			Refs: &[]asset_manager.AssetRef{
-				{
-					KbId:      kbId,
-					AssetId:   seedAsset.AssetId,
-					AssetType: asset_manager.AssetTypeDocument,
-					RefType:   asset_manager.AssetRefTypeParent,
-				},
-			},
-		}
-		*seedAsset.Refs = append(*seedAsset.Refs, asset_manager.AssetRef{
-			KbId:      kbId,
-			AssetId:   pageId,
-			AssetType: asset_manager.AssetTypePage,
-			RefType:   asset_manager.AssetRefTypeChild,
-		})
-	}
-	pageAssets := []asset_manager.ContextualAsset{}
-	for _, v := range pageAssetsMap {
-		pageAssets = append(pageAssets, v)
+	pageAssets, err := preparePageAssets(g.serviceName, kbId, filename, tsVersion, sources, labels, &seedAsset)
+	if err != nil {
+		logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
+		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 	}
 	logger.DebugContext(ctx, "prepared page assets successfully", slog.String("kbId", kbId), slog.Int("pages", len(pageAssets)))
 
@@ -228,45 +276,10 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 	}
 	logger.DebugContext(ctx, "extracted chunks successfully", slog.String("kbId", kbId), slog.Int("chunks", len(chunks)))
-	chunkAssetsMap := map[string]asset_manager.ContextualAsset{}
-	for _, c := range chunks {
-		pageNumber := c.PageNumber
-		if pageNumber >= len(pageAssets) {
-			msg := fmt.Sprintf("page asset not found for page number %d (page assets length: %d)", pageNumber, len(pageAssets))
-			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
-			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, errors.New(msg)
-		}
-		page := pageAssets[pageNumber]
-		refs := []asset_manager.AssetRef{
-			{
-				KbId:      kbId,
-				AssetId:   page.AssetId,
-				AssetType: page.AssetType,
-				RefType:   asset_manager.AssetRefTypeParent,
-			},
-		}
-		chunkId := fmt.Sprintf("%s[%d:%d]", page.AssetId, c.StartPos, c.StartPos+len(c.Content))
-		chunkAssetsMap[chunkId] = asset_manager.ContextualAsset{
-			IndexedBy: g.serviceName,
-			KbId:      kbId,
-			AssetType: asset_manager.AssetTypeChunk,
-			AssetId:   chunkId,
-			Version:   tsVersion,
-			Content:   c.Content,
-			Metadata:  c.Metadata,
-			Refs:      &refs,
-		}
-		parentRef := asset_manager.AssetRef{
-			KbId:      kbId,
-			AssetId:   chunkId,
-			AssetType: asset_manager.AssetTypeChunk,
-			RefType:   asset_manager.AssetRefTypeChild,
-		}
-		*page.Refs = append(*page.Refs, parentRef)
-	}
-	chunkAssets := []asset_manager.ContextualAsset{}
-	for _, v := range chunkAssetsMap {
-		chunkAssets = append(chunkAssets, v)
+	chunkAssets, err := prepareChunkAssets(g.serviceName, kbId, tsVersion, chunks, pageAssets)
+	if err != nil {
+		logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
+		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 	}
 	logger.DebugContext(ctx, "prepared chunk assets successfully", slog.String("kbId", kbId), slog.Int("chunks", len(chunkAssets)))
 	// 3. Extract Entities & Relations
@@ -428,7 +441,7 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 	}
 	logger.DebugContext(ctx, "generated embeddings for entities successfully", slog.String("kbId", kbId), slog.Int("entities", len(vectorAssets)))
 
-	allAssets := []asset_manager.ContextualAsset{}
+	allAssets := make([]asset_manager.ContextualAsset, 0, 1+len(pageAssets)+len(chunkAssets)+len(entityAssets)+len(relationAssets))
 	allAssets = append(allAssets, seedAsset)
 	allAssets = append(allAssets, pageAssets...)
 	allAssets = append(allAssets, chunkAssets...)
@@ -469,9 +482,11 @@ func (g *GraphRAGServiceImpl) getTransitionMatrixForKbId(ctx context.Context, en
 	kbId := entityAssets[0].KbId
 	version := entityAssets[0].Version
 
-	entityIndiceToId := []string{}
-	for _, entityAsset := range entityAssets {
+	entityIndiceToId := make([]string, 0, len(entityAssets))
+	entityIDToIndex := make(map[string]int, len(entityAssets))
+	for idx, entityAsset := range entityAssets {
 		entityIndiceToId = append(entityIndiceToId, entityAsset.AssetId)
+		entityIDToIndex[entityAsset.AssetId] = idx
 	}
 	pDOK := sparse.NewDOK(len(entityIndiceToId), len(entityIndiceToId))
 	rDim, cDim := pDOK.Dims()
@@ -493,7 +508,7 @@ func (g *GraphRAGServiceImpl) getTransitionMatrixForKbId(ctx context.Context, en
 		logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
 		return models.TransitionMatrix{}, errors.New(msg)
 	}
-	
+
 	for _, relationAsset := range relationAssets {
 		var sourceRef asset_manager.AssetRef
 		var targetRef asset_manager.AssetRef
@@ -520,9 +535,9 @@ func (g *GraphRAGServiceImpl) getTransitionMatrixForKbId(ctx context.Context, en
 			)
 			continue
 		}
-		sourceIndex := slices.Index(entityIndiceToId, sourceRef.AssetId)
-		targetIndex := slices.Index(entityIndiceToId, targetRef.AssetId)
-		if sourceIndex == -1 || targetIndex == -1 {
+		sourceIndex, sourceOK := entityIDToIndex[sourceRef.AssetId]
+		targetIndex, targetOK := entityIDToIndex[targetRef.AssetId]
+		if !sourceOK || !targetOK {
 			msg := "relation asset is not complete, source or target entity not found in entityAssets, skipping"
 			logger.WarnContext(
 				ctx, msg,
@@ -582,7 +597,7 @@ func (g *GraphRAGServiceImpl) getTransitionMatrixForKbId(ctx context.Context, en
 		}
 	}
 
-	return models.TransitionMatrix{CSR: pCSR, EntityIndiceToId: entityIndiceToId, Dim: len(entityIndiceToId)}, nil
+	return models.TransitionMatrix{CSR: pCSR, EntityIndiceToId: entityIndiceToId, EntityIDToIndex: entityIDToIndex, Dim: len(entityIndiceToId)}, nil
 }
 
 func (g *GraphRAGServiceImpl) getSeedVector(
@@ -614,7 +629,7 @@ func (g *GraphRAGServiceImpl) getSeedVector(
 			countGeneric++
 		}
 	}
-	w := make([]float32, 3)
+	var w [3]float32
 	w[0] = weights[0] / float32(countNamed)
 	w[1] = weights[1] / float32(countGeneric)
 	w[2] = weights[2]
@@ -623,11 +638,6 @@ func (g *GraphRAGServiceImpl) getSeedVector(
 	var mu sync.Mutex
 	// query in concurrency
 	sem := make(chan struct{}, g.MaxConcurrent)
-	queryResults := map[string][]asset_manager.RetrievedVector{
-		models.NamedEntityType:   []asset_manager.RetrievedVector{},
-		models.GenericEntityType: []asset_manager.RetrievedVector{},
-		models.QueryEntityType:   []asset_manager.RetrievedVector{},
-	}
 	for _, queryEntity := range queryEntities {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -646,38 +656,34 @@ func (g *GraphRAGServiceImpl) getSeedVector(
 				)
 				return
 			}
+			weight := w[2]
+			if qe.Type == models.NamedEntityType {
+				weight = w[0]
+			} else if qe.Type == models.GenericEntityType {
+				weight = w[1]
+			}
 			mu.Lock()
-			queryResults[qe.Type] = append(queryResults[qe.Type], retrievedAssets...)
-			mu.Unlock()
-		}(queryEntity)
-	}
-	wg.Wait()
-
-	// accumulate the seed vector
-	for entityType, retrievedAssets := range queryResults {
-		for _, retrievedAsset := range retrievedAssets {
-			if idx := slices.Index(transitionMatrix.EntityIndiceToId, retrievedAsset.AssetId); idx != -1 {
+			for _, retrievedAsset := range retrievedAssets {
+				idx, ok := transitionMatrix.EntityIDToIndex[retrievedAsset.AssetId]
+				if !ok {
+					continue
+				}
 				if retrievedAsset.Score == nil {
 					msg := "retrieved asset has no score, skipping"
 					logger.WarnContext(
 						ctx, msg,
 						slog.String("kbId", kbId),
 						slog.String("entity", retrievedAsset.AssetId),
-						slog.String("entityType", entityType),
+						slog.String("entityType", qe.Type),
 					)
 					continue
 				}
-				score := float32(*retrievedAsset.Score)
-				if entityType == models.NamedEntityType {
-					sVec[idx] += score * w[0]
-				} else if entityType == models.GenericEntityType {
-					sVec[idx] += score * w[1]
-				} else if entityType == models.QueryEntityType {
-					sVec[idx] += score * w[2]
-				}
+				sVec[idx] += float32(*retrievedAsset.Score) * weight
 			}
-		}
+			mu.Unlock()
+		}(queryEntity)
 	}
+	wg.Wait()
 	// normalize the seed vector
 	sVecSum := float32(0.0)
 	for _, v := range sVec {
@@ -710,12 +716,15 @@ func (g *GraphRAGServiceImpl) ppr(ctx context.Context, s []float32, P *sparse.CS
 	// 2. Initialize v as the seed vector
 	v := make([]float32, cols)
 	copy(v, s)
+	vNext := make([]float32, cols)
 
 	oneMinusAlpha := 1.0 - alpha
 
 	// 3. Power Iteration Loop
 	for it := 0; it < g.MaxWalks; it++ {
-		vNext := make([]float32, cols)
+		for i := range vNext {
+			vNext[i] = 0
+		}
 
 		// 1. Random Walk Step: vNext = v * P
 		for i := 0; i < len(v); i++ {
@@ -777,21 +786,13 @@ func (g *GraphRAGServiceImpl) retrieveForKbId(ctx context.Context, queryEntities
 	logger.DebugContext(ctx, "found entities for kbId", slog.String("kbId", kbId), slog.Any("version", version))
 
 	logger.DebugContext(ctx, "deduplicate entity assets", slog.String("kbId", kbId))
-	entitiesMap := map[string]asset_manager.ContextualAsset{}
-	for _, entityAsset := range entityAssets {
-		if _, ok := entitiesMap[entityAsset.AssetId]; ok {
-			logger.WarnContext(ctx, "duplicate entity asset found for kbId, skipping", slog.String("kbId", kbId), slog.String("entityId", entityAsset.AssetId))
-			continue
+	dedupedEntityAssets, entitiesMap, duplicateEntityIDs := dedupeContextualAssetsByID(entityAssets)
+	if len(dedupedEntityAssets) != len(entityAssets) {
+		for _, entityID := range duplicateEntityIDs {
+			logger.WarnContext(ctx, "duplicate entity asset found for kbId, skipping", slog.String("kbId", kbId), slog.String("entityId", entityID))
 		}
-		entitiesMap[entityAsset.AssetId] = entityAsset
-	}
-	// to ensure entityAssets is in the same order and size as entitiesMap
-	if len(entityAssets) != len(entitiesMap) {
-		logger.WarnContext(ctx, "entity assets were deduplicated, reordering", slog.String("kbId", kbId), slog.Int("originalCount", len(entityAssets)), slog.Int("deduplicatedCount", len(entitiesMap)))
-		entityAssets = make([]asset_manager.ContextualAsset, 0, len(entitiesMap))
-		for _, entityAsset := range entitiesMap {
-			entityAssets = append(entityAssets, entityAsset)
-		}
+		logger.WarnContext(ctx, "entity assets were deduplicated, preserving first-seen order", slog.String("kbId", kbId), slog.Int("originalCount", len(entityAssets)), slog.Int("deduplicatedCount", len(dedupedEntityAssets)))
+		entityAssets = dedupedEntityAssets
 	}
 	logger.DebugContext(ctx, "deduplicated entity assets", slog.String("kbId", kbId), slog.Int("count", len(entityAssets)))
 
@@ -1039,7 +1040,7 @@ func (g *GraphRAGServiceImpl) Retrieve(ctx context.Context, query string, kbIds 
 			defer wg.Done()
 			defer func() { <-sem }()
 			version := refAssets[0].Version
-		
+
 			refEntityIds := make([]string, 0, len(refAssets))
 			for _, asset := range refAssets {
 				refEntityIds = append(refEntityIds, asset.AssetId)
@@ -1067,12 +1068,14 @@ func (g *GraphRAGServiceImpl) Retrieve(ctx context.Context, query string, kbIds 
 			}
 
 			// propagate chunk assets
-			chunkIds := []string{}
+			chunkIDsSet := make(map[string]struct{})
+			chunkIds := make([]string, 0, len(refAssets))
 			for _, asset := range refAssets {
 				if asset.Refs != nil {
 					for _, ref := range *asset.Refs {
 						if ref.AssetType == asset_manager.AssetTypeChunk {
-							if !slices.Contains(chunkIds, ref.AssetId) {
+							if _, exists := chunkIDsSet[ref.AssetId]; !exists {
+								chunkIDsSet[ref.AssetId] = struct{}{}
 								chunkIds = append(chunkIds, ref.AssetId)
 							}
 						}
@@ -1083,7 +1086,8 @@ func (g *GraphRAGServiceImpl) Retrieve(ctx context.Context, query string, kbIds 
 				if asset.Refs != nil {
 					for _, ref := range *asset.Refs {
 						if ref.AssetType == asset_manager.AssetTypeChunk {
-							if !slices.Contains(chunkIds, ref.AssetId) {
+							if _, exists := chunkIDsSet[ref.AssetId]; !exists {
+								chunkIDsSet[ref.AssetId] = struct{}{}
 								chunkIds = append(chunkIds, ref.AssetId)
 							}
 						}

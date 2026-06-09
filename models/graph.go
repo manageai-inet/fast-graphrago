@@ -27,7 +27,7 @@ type GraphRelation struct {
 }
 
 type ExtractedGraph struct {
-	Entities []GraphEntity `json:"entities" jsonschema:"The list of extracted entities"`
+	Entities  []GraphEntity   `json:"entities" jsonschema:"The list of extracted entities"`
 	Relations []GraphRelation `json:"relationships" jsonschema:"The list of extracted relations, each relation must have a source and target entity that exist in the entities list"`
 }
 
@@ -42,10 +42,10 @@ func GetGraphExtractionTool() (openai.ChatCompletionToolParam, error) {
 }
 
 type RelationGroup struct {
-	Source RelativeEntity `json:"source" jsonschema:"The source of the relation"`
-	Target RelativeEntity `json:"target" jsonschema:"The target of the relation"`
-	Desc   string `json:"desc" jsonschema:"The description for the relation context"`
-	Indices    []int `json:"indices" jsonschema:"The list of relation indices within the cluster"`
+	Source  RelativeEntity `json:"source" jsonschema:"The source of the relation"`
+	Target  RelativeEntity `json:"target" jsonschema:"The target of the relation"`
+	Desc    string         `json:"desc" jsonschema:"The description for the relation context"`
+	Indices []int          `json:"indices" jsonschema:"The list of relation indices within the cluster"`
 }
 
 type RelationClusters struct {
@@ -86,7 +86,7 @@ const GenericEntityType = "GENERIC"
 const QueryEntityType = "QUERY"
 
 type ExtractedQuery struct {
-	NamedEntities []string `json:"named_entities" jsonschema:"The list of extracted named entities"`
+	NamedEntities   []string `json:"named_entities" jsonschema:"The list of extracted named entities"`
 	GenericEntities []string `json:"generic_entities" jsonschema:"The list of extracted generic entities"`
 }
 
@@ -101,34 +101,35 @@ func GetQueryExtractionTool() (openai.ChatCompletionToolParam, error) {
 }
 
 type EntityAsset struct {
-	Name string
-	Type string
+	Name        string
+	Type        string
 	Description string
-	ChunkIds []string
+	ChunkIds    []string
 }
 
 type RelationAsset struct {
-	Source string
-	SourceType string
-	Target string
-	TargetType string
+	Source      string
+	SourceType  string
+	Target      string
+	TargetType  string
 	Description string
-	ChunkIds []string
+	ChunkIds    []string
 }
 
 type GraphAssets struct {
-	EntityAssets []EntityAsset
+	EntityAssets   []EntityAsset
 	RelationAssets []RelationAsset
 }
 
 type QueryEntity struct {
-	Name string
-	Type string
+	Name      string
+	Type      string
 	Embedding []float32
 }
 
 type TransitionMatrix struct {
-	CSR *sparse.CSR
+	CSR              *sparse.CSR
 	EntityIndiceToId []string
-	Dim int // it is square matrix size, number of entities
+	EntityIDToIndex  map[string]int
+	Dim              int // it is square matrix size, number of entities
 }
