@@ -2,6 +2,7 @@ package rag
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/manageai-inet/fast-graphrago/graph"
 	"github.com/manageai-inet/fast-graphrago/llm"
@@ -18,6 +19,10 @@ type GraphRAGServiceCompileTimeOptions struct {
 	BatchSize int `json:"batch_size"`
 	// (Engine Config) Batch size for embedding (entities per EmbedBatch API call)
 	EmbedBatchSize int `json:"embed_batch_size"`
+	// (Engine Config) Retry attempts for embedding batch or single-item calls
+	EmbedRetryAttempts int
+	// (Engine Config) Delay between embedding retries
+	EmbedRetryDelay time.Duration
 	// (Engine Config) LLM for entities and relations extraction, should support tool calling
 	LLM llm.LLM
 	// (Engine Config) Chunk Extractor
@@ -63,9 +68,11 @@ func NewGraphRAGServiceOptions() *GraphRAGServiceOptions {
 	defaultThreshold := utils.DefaultThreshold
 	return &GraphRAGServiceOptions{
 		GraphRAGServiceCompileTimeOptions: GraphRAGServiceCompileTimeOptions{
-			MaxConcurrent:  utils.DefaultMaxConcurrent,
-			BatchSize:      utils.DefaultBatchSize,
-			EmbedBatchSize: utils.DefaultEmbedBatchSize,
+			MaxConcurrent:      utils.DefaultMaxConcurrent,
+			BatchSize:          utils.DefaultBatchSize,
+			EmbedBatchSize:     utils.DefaultEmbedBatchSize,
+			EmbedRetryAttempts: utils.DefaultEmbedRetryAttempts,
+			EmbedRetryDelay:    utils.DefaultEmbedRetryDelay,
 		},
 		GraphRAGServiceRuntimeOptions: GraphRAGServiceRuntimeOptions{
 			Domain:        utils.DefaultDomain,
@@ -197,6 +204,18 @@ func WithEmbedder(embedder asset_manager.Embedder) Option {
 func WithEmbedBatchSize(embedBatchSize int) Option {
 	return func(opts *GraphRAGServiceOptions) {
 		opts.EmbedBatchSize = embedBatchSize
+	}
+}
+
+func WithEmbedRetryAttempts(attempts int) Option {
+	return func(opts *GraphRAGServiceOptions) {
+		opts.EmbedRetryAttempts = attempts
+	}
+}
+
+func WithEmbedRetryDelay(delay time.Duration) Option {
+	return func(opts *GraphRAGServiceOptions) {
+		opts.EmbedRetryDelay = delay
 	}
 }
 

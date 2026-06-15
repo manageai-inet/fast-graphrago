@@ -75,8 +75,26 @@ func NewGraphRAGService(
 // batchEmbed embeds entities in batches using EmbedBatch, returning one VectorAsset per entity.
 // Batches are processed sequentially; results are ordered to match entities.
 func batchEmbed(ctx context.Context, entities []asset_manager.ContextualAsset, embedder asset_manager.Embedder, batchSize int) ([]asset_manager.VectorAsset, error) {
+	return batchEmbedWithRetry(ctx, entities, embedder, batchSize, nil, utils.DefaultEmbedRetryAttempts, utils.DefaultEmbedRetryDelay)
+}
+
+func batchEmbedWithRetry(
+	ctx context.Context,
+	entities []asset_manager.ContextualAsset,
+	embedder asset_manager.Embedder,
+	batchSize int,
+	logger *slog.Logger,
+	retryAttempts int,
+	retryDelay time.Duration,
+) ([]asset_manager.VectorAsset, error) {
 	if batchSize <= 0 {
 		batchSize = utils.DefaultEmbedBatchSize
+	}
+	if retryAttempts <= 0 {
+		retryAttempts = utils.DefaultEmbedRetryAttempts
+	}
+	if retryDelay < 0 {
+		retryDelay = 0
 	}
 	n := len(entities)
 	numBatches := (n + batchSize - 1) / batchSize
@@ -93,9 +111,24 @@ func batchEmbed(ctx context.Context, entities []asset_manager.ContextualAsset, e
 		for i, e := range batch {
 			contents[i] = e.Content
 		}
-		vectors, err := embedder.EmbedBatch(ctx, contents)
+		vectors, err := embedBatchVectorsWithRetry(ctx, embedder, contents, logger, model, retryAttempts, retryDelay)
 		if err != nil {
-			return nil, err
+			if len(batch) == 1 {
+				return nil, err
+			}
+			if logger != nil {
+				logger.WarnContext(ctx, "embedding batch failed after retries, falling back to per-item embedding",
+					slog.String("embeddingModel", model),
+					slog.Int("batchSize", len(batch)),
+					slog.Int("retryAttempts", retryAttempts),
+					slog.Duration("retryDelay", retryDelay),
+					slog.String("error", err.Error()),
+				)
+			}
+			vectors, err = embedIndividuallyWithRetry(ctx, embedder, contents, logger, model, retryAttempts, retryDelay)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if len(vectors) != len(batch) {
 			return nil, fmt.Errorf("embedder returned %d vectors for %d inputs", len(vectors), len(batch))
@@ -123,6 +156,104 @@ func batchEmbed(ctx context.Context, entities []asset_manager.ContextualAsset, e
 		}
 	}
 	return vectorAssets, nil
+}
+
+func embedBatchVectorsWithRetry(ctx context.Context, embedder asset_manager.Embedder, contents []string, logger *slog.Logger, model string, attempts int, delay time.Duration) ([][]float32, error) {
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		vectors, err := embedder.EmbedBatch(ctx, contents)
+		if err == nil {
+			return vectors, nil
+		}
+		lastErr = err
+		if attempt == attempts {
+			break
+		}
+		if logger != nil {
+			logger.WarnContext(ctx, "retrying embedding batch after failure",
+				slog.String("embeddingModel", model),
+				slog.Int("inputCount", len(contents)),
+				slog.Int("attempt", attempt),
+				slog.Int("maxAttempts", attempts),
+				slog.Duration("retryDelay", delay),
+				slog.String("error", err.Error()),
+			)
+		}
+		if err := sleepWithContext(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func embedIndividuallyWithRetry(ctx context.Context, embedder asset_manager.Embedder, contents []string, logger *slog.Logger, model string, attempts int, delay time.Duration) ([][]float32, error) {
+	vectors := make([][]float32, len(contents))
+	for i, content := range contents {
+		vector, err := embedSingleWithRetry(ctx, embedder, content, logger, model, i, attempts, delay)
+		if err != nil {
+			return nil, err
+		}
+		vectors[i] = vector
+	}
+	return vectors, nil
+}
+
+func embedSingleWithRetry(ctx context.Context, embedder asset_manager.Embedder, content string, logger *slog.Logger, model string, index int, attempts int, delay time.Duration) ([]float32, error) {
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		vector, err := embedder.Embed(ctx, content)
+		if err == nil {
+			return vector, nil
+		}
+		lastErr = err
+		if attempt == attempts {
+			break
+		}
+		if logger != nil {
+			logger.WarnContext(ctx, "retrying single-item embedding after failure",
+				slog.String("embeddingModel", model),
+				slog.Int("itemIndex", index),
+				slog.Int("attempt", attempt),
+				slog.Int("maxAttempts", attempts),
+				slog.Duration("retryDelay", delay),
+				slog.String("error", err.Error()),
+			)
+		}
+		if err := sleepWithContext(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+	if logger != nil {
+		logger.ErrorContext(ctx, "single-item embedding failed after retries",
+			slog.String("embeddingModel", model),
+			slog.Int("itemIndex", index),
+			slog.String("inputSnippet", truncateEmbeddingLog(content, 300)),
+			slog.String("error", lastErr.Error()),
+		)
+	}
+	return nil, fmt.Errorf("single-item embedding failed at batch index %d: %w", index, lastErr)
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func truncateEmbeddingLog(value string, limit int) string {
+	clean := strings.TrimSpace(value)
+	if len(clean) <= limit {
+		return clean
+	}
+	return clean[:limit] + "...<truncated>"
 }
 
 func (g *GraphRAGServiceImpl) SetLogger(logger *slog.Logger) {
@@ -399,7 +530,7 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 	var vectorAssets []asset_manager.VectorAsset
 	if g.Embedder != nil {
 		var embedErr error
-		vectorAssets, embedErr = batchEmbed(ctx, entityAssets, g.Embedder, g.EmbedBatchSize)
+		vectorAssets, embedErr = batchEmbedWithRetry(ctx, entityAssets, g.Embedder, g.EmbedBatchSize, asset_manager.GetLogger(g), g.EmbedRetryAttempts, g.EmbedRetryDelay)
 		if embedErr != nil {
 			logger.ErrorContext(ctx, embedErr.Error(), slog.String("kbId", kbId))
 			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, embedErr

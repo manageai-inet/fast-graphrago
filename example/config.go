@@ -22,11 +22,11 @@ import (
 
 	"github.com/manageai-inet/agentic-assets-elasticsearch/v8"
 
-	am "github.com/manageai-inet/agentic-assets"
-	amk "github.com/manageai-inet/agentic-assets/knowledge_extractor"
-	mai "github.com/manageai-inet/agentic-assets-manageai"
-	amai "github.com/manageai-inet/agentic-assets-manageai"
 	maiclient "github.com/manageai-inet/Eino-ManageAI-Extension/components/core/manageai"
+	am "github.com/manageai-inet/agentic-assets"
+	amai "github.com/manageai-inet/agentic-assets-manageai"
+	mai "github.com/manageai-inet/agentic-assets-manageai"
+	amk "github.com/manageai-inet/agentic-assets/knowledge_extractor"
 )
 
 type AppConfig struct {
@@ -39,11 +39,11 @@ type AppConfig struct {
 	ChunkOverlap int `envconfig:"chunk_overlap" default:"50"`
 
 	// Elasticsearch configuration
-	ElasticHost []string `envconfig:"elastic_host" default:"http://localhost:9200"`
-	ElasticUser string   `envconfig:"elastic_user" default:""`
-	ElasticPassword string `envconfig:"elastic_password" default:""`
-	ElasticAPIKey string `envconfig:"elastic_api_key" default:""`
-	ElasticServiceToken string `envconfig:"elastic_service_token" default:""`
+	ElasticHost         []string `envconfig:"elastic_host" default:"http://localhost:9200"`
+	ElasticUser         string   `envconfig:"elastic_user" default:""`
+	ElasticPassword     string   `envconfig:"elastic_password" default:""`
+	ElasticAPIKey       string   `envconfig:"elastic_api_key" default:""`
+	ElasticServiceToken string   `envconfig:"elastic_service_token" default:""`
 
 	// Index name for storing assets in Elasticsearch
 	AssetsStorageIndex string `envconfig:"assets_storage_index" default:"fast-graphrago-assets"`
@@ -53,14 +53,18 @@ type AppConfig struct {
 	MaxConcurrent int `envconfig:"max_concurrent" default:"1"`
 	// Batch size for embedding (entities per EmbedBatch API call)
 	EmbedBatchSize int `envconfig:"embed_batch_size" default:"32"`
+	// Retry attempts for embedding failures before fallback
+	EmbedRetryAttempts int `envconfig:"embed_retry_attempts" default:"3"`
+	// Delay between embedding retries in milliseconds
+	EmbedRetryDelayMS int `envconfig:"embed_retry_delay_ms" default:"500"`
 	// LLM HTTP timeout in seconds (default 5 minutes to support large batch extraction)
 	LLMTimeoutSeconds int `envconfig:"llm_timeout_seconds" default:"300"`
 
 	// OCR Service Configuration
 	OcrServiceProjectId string `envconfig:"ocr_service_project_id" default:""`
-	OcrServiceLocation string `envconfig:"ocr_service_location" default:""`
-	OcrServiceAPIPath string `envconfig:"ocr_service_api_path" default:""`
-	OcrServiceAPIKey string `envconfig:"ocr_service_api_key" default:""`
+	OcrServiceLocation  string `envconfig:"ocr_service_location" default:""`
+	OcrServiceAPIPath   string `envconfig:"ocr_service_api_path" default:""`
+	OcrServiceAPIKey    string `envconfig:"ocr_service_api_key" default:""`
 
 	am.LoggingCapacity
 }
@@ -84,7 +88,7 @@ func LoadConfig(prefix string) (*AppConfig, error) {
 	})
 	logger := slog.New(logHand)
 	cfg.SetLogger(logger)
-	
+
 	return cfg, nil
 }
 
@@ -118,10 +122,10 @@ func InitializeFastGraphIndexerFromConfig(cfg *AppConfig) (*fastgraphrag.FastGra
 
 	// Setup Elasticsearch Client
 	elsCfg := elasticsearch.Config{
-		Addresses: cfg.ElasticHost,
-		Username:  cfg.ElasticUser,
-		Password:  cfg.ElasticPassword,
-		APIKey:    cfg.ElasticAPIKey,
+		Addresses:    cfg.ElasticHost,
+		Username:     cfg.ElasticUser,
+		Password:     cfg.ElasticPassword,
+		APIKey:       cfg.ElasticAPIKey,
 		ServiceToken: cfg.ElasticServiceToken,
 	}
 	elsCli, err := elasticsearch.NewTypedClient(elsCfg)
@@ -157,7 +161,7 @@ func InitializeFastGraphIndexerFromConfig(cfg *AppConfig) (*fastgraphrag.FastGra
 	}
 
 	// Setup Simple Chunk Extractor
-	// This is just simple text splitter that will split text into chunks of size `ChunkSize` with an overlap of `ChunkOverlap`. 
+	// This is just simple text splitter that will split text into chunks of size `ChunkSize` with an overlap of `ChunkOverlap`.
 	// You can implement your own chunk extractor if you want to do more complex processing (e.g. using a language model to extract chunks).
 	chunkExt := chunk.NewSimpleChunkExtractor(&cfg.ChunkSize, &cfg.ChunkOverlap)
 	chunkExt.SetLogger(logger)
@@ -169,6 +173,8 @@ func InitializeFastGraphIndexerFromConfig(cfg *AppConfig) (*fastgraphrag.FastGra
 	opts = append(opts, rag.WithGraphExtractor(graphExt))
 	opts = append(opts, rag.WithEmbedder(embedder))
 	opts = append(opts, rag.WithEmbedBatchSize(cfg.EmbedBatchSize))
+	opts = append(opts, rag.WithEmbedRetryAttempts(cfg.EmbedRetryAttempts))
+	opts = append(opts, rag.WithEmbedRetryDelay(time.Duration(cfg.EmbedRetryDelayMS)*time.Millisecond))
 	opts = append(opts, rag.WithLLM(chatModel))
 	// Initialize the FastGraphRAG Indexer with the chat model, vector store, and asset store.
 	fgIndexer, err := fastgraphrag.New(chatModel, vectorStore, assetStore, opts...)
@@ -177,32 +183,32 @@ func InitializeFastGraphIndexerFromConfig(cfg *AppConfig) (*fastgraphrag.FastGra
 		return nil, err
 	}
 	fgIndexer.SetLogger(logger)
-	
+
 	return fgIndexer, nil
 }
 
 func InitializeKnowledgeExtractorsFromConfig(cfg *AppConfig) (*map[string]amk.KnowledgeExtractor, error) {
 	logger := am.GetLogger(cfg)
-	
+
 	logger.Info("Setting up Knowledge Extractors", slog.String("log_level", cfg.LogLevel))
 
 	// Initialize OCR Knowledge Extractor
 	logger.Info("Initializing OCR Service")
 	ocrCfg := amai.OcrLayoutApiRequestConfig{
 		ProjectId: cfg.OcrServiceProjectId,
-		Location: cfg.OcrServiceLocation,
+		Location:  cfg.OcrServiceLocation,
 	}
 	ocrRepo := mai.NewOcrLayoutApiRepo(cfg.OcrServiceAPIPath, cfg.OcrServiceAPIKey, &ocrCfg)
 	ocrRepo.SetLogger(logger)
 
-	// key is used for matching with input FileType, 
-	// not need to be the same as actual file extension, 
+	// key is used for matching with input FileType,
+	// not need to be the same as actual file extension,
 	// but it's better to set it to something meaningful for better logging and debugging.
 	extractors := make(map[string]amk.KnowledgeExtractor)
 
 	logger.Info("Initializing Plain Text Knowledge Extractor using default implementation in agentic-assets")
-	// Plain Text Converter using the default implementation in agentic-assets, 
-	// which simply returns the original text content without any processing. 
+	// Plain Text Converter using the default implementation in agentic-assets,
+	// which simply returns the original text content without any processing.
 	// You can implement your own converter if you want to do some custom processing (e.g. cleaning, formatting) on the text content.
 	textConv := amk.NewPlainTextConverter()
 	textConv.SetLogger(logger)
@@ -211,7 +217,7 @@ func InitializeKnowledgeExtractorsFromConfig(cfg *AppConfig) (*map[string]amk.Kn
 	textLoadHttpLoader := amk.NewHttpFileLoader(nil)
 	textLoadHttpLoader.SetLogger(logger)
 
-	// As mentioned above, key is used for matching with input FileType, not need to be the same as actual file extension, 
+	// As mentioned above, key is used for matching with input FileType, not need to be the same as actual file extension,
 	// but it's better to set it to something meaningful for better logging and debugging.
 	textExt := amk.NewDocumentExtractor(map[amk.KnowledgeLoader]amk.KnowledgeConverter{
 		textLoadHttpLoader: textConv,
@@ -226,14 +232,14 @@ func InitializeKnowledgeExtractorsFromConfig(cfg *AppConfig) (*map[string]amk.Kn
 	// PDF Converter using OCR for layout analysis and text extraction
 	pdfConv := mai.NewOcrLayoutApiConverter("pdf", ocrRepo)
 	pdfConv.SetLogger(logger)
-	
+
 	// PDF Loader to load PDF files from HTTP URLs
 	pdfLoadHttpLoader := loaders.NewHttpPDFLoader(nil)
 	pdfLoadHttpLoader.SetLogger(logger)
 
 	// Following is an example of how to add another PDF loader that loads PDF files from local file system.
-	// This is just for demonstration purpose, you can choose to implement it or not based on your use case. 
-	// If you want to support loading PDF files from local file system, 
+	// This is just for demonstration purpose, you can choose to implement it or not based on your use case.
+	// If you want to support loading PDF files from local file system,
 	// you can uncomment the following lines and make sure to put your PDF files under the specified root path.
 
 	// PDF Loader to load PDF files from local file system

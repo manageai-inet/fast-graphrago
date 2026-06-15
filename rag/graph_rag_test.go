@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -54,6 +55,38 @@ func (m *mockEmbedderWithError) Embed(ctx context.Context, content string) ([]fl
 }
 func (m *mockEmbedderWithError) EmbedBatch(ctx context.Context, contents []string) ([][]float32, error) {
 	return nil, m.err
+}
+
+type flakyBatchEmbedder struct {
+	mu                sync.Mutex
+	model             string
+	dim               int
+	batchFailuresLeft int
+	batchCalls        int
+	singleCalls       int
+}
+
+func (m *flakyBatchEmbedder) GetEmbeddingModel() string { return m.model }
+func (m *flakyBatchEmbedder) GetEmbeddingDim() int      { return m.dim }
+func (m *flakyBatchEmbedder) Embed(ctx context.Context, content string) ([]float32, error) {
+	m.mu.Lock()
+	m.singleCalls++
+	m.mu.Unlock()
+	return make([]float32, m.dim), nil
+}
+func (m *flakyBatchEmbedder) EmbedBatch(ctx context.Context, contents []string) ([][]float32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.batchCalls++
+	if m.batchFailuresLeft > 0 {
+		m.batchFailuresLeft--
+		return nil, errors.New("temporary embed batch failure")
+	}
+	result := make([][]float32, len(contents))
+	for i := range result {
+		result[i] = make([]float32, m.dim)
+	}
+	return result, nil
 }
 
 func makeTestEntities(n int) []asset_manager.ContextualAsset {
@@ -156,11 +189,49 @@ func TestBatchEmbed_EmbedBatchError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
-	if err != expectedErr {
-		t.Errorf("expected %v, got %v", expectedErr, err)
+	if !strings.Contains(err.Error(), expectedErr.Error()) {
+		t.Errorf("expected error containing %q, got %v", expectedErr.Error(), err)
 	}
 	if vecs != nil {
 		t.Errorf("expected nil slice on error, got %v", vecs)
+	}
+}
+
+func TestBatchEmbed_RetriesBatchThenSucceeds(t *testing.T) {
+	entities := makeTestEntities(3)
+	emb := &flakyBatchEmbedder{model: "test-model", dim: 4, batchFailuresLeft: 2}
+
+	vecs, err := batchEmbedWithRetry(context.Background(), entities, emb, 50, nil, 3, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(vecs) != 3 {
+		t.Fatalf("expected 3 VectorAssets, got %d", len(vecs))
+	}
+	if emb.batchCalls != 3 {
+		t.Fatalf("expected 3 batch calls, got %d", emb.batchCalls)
+	}
+	if emb.singleCalls != 0 {
+		t.Fatalf("expected no single-item fallback, got %d single calls", emb.singleCalls)
+	}
+}
+
+func TestBatchEmbed_FallsBackToSingleItemEmbedding(t *testing.T) {
+	entities := makeTestEntities(2)
+	emb := &flakyBatchEmbedder{model: "test-model", dim: 2, batchFailuresLeft: 3}
+
+	vecs, err := batchEmbedWithRetry(context.Background(), entities, emb, 50, nil, 3, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(vecs) != 2 {
+		t.Fatalf("expected 2 VectorAssets, got %d", len(vecs))
+	}
+	if emb.batchCalls != 3 {
+		t.Fatalf("expected 3 batch calls before fallback, got %d", emb.batchCalls)
+	}
+	if emb.singleCalls != 2 {
+		t.Fatalf("expected 2 single-item fallback calls, got %d", emb.singleCalls)
 	}
 }
 
