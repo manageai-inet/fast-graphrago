@@ -45,6 +45,7 @@ const DefaultEmbedRetryDelay = 500 * time.Millisecond
 const DefaultDedupBatchSize = 5
 const DefaultMaxWalks = 100
 const DefaultDampingFactor = 0.5
+const DefaultPPRConvergenceThreshold = float32(1e-6)
 const DefaultTopK = 50
 const DefaultThreshold = float32(0.3)
 
