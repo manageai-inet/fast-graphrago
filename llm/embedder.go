@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 
@@ -72,14 +73,26 @@ func (m *OpenAIEmbedder) EmbedBatch(ctx context.Context, contents []string) ([][
 	if err != nil {
 		return nil, err
 	}
-	embeddings := make([][]float32, len(embeddingResponse.Data))
-	for i, data := range embeddingResponse.Data {
+	// OpenAI does not guarantee response order matches input order.
+	// Use data.Index (the input index) instead of the response position.
+	embeddings := make([][]float32, len(contents))
+	for _, data := range embeddingResponse.Data {
+		idx := int(data.Index)
+		if idx < 0 || idx >= len(embeddings) {
+			return nil, fmt.Errorf("openai returned embedding with out-of-range index %d (batch size %d)", idx, len(contents))
+		}
 		vector := data.Embedding
 		embedding := make([]float32, len(vector))
 		for j, v := range vector {
 			embedding[j] = float32(v)
 		}
-		embeddings[i] = embedding
+		embeddings[idx] = embedding
+	}
+	// verify all slots were filled
+	for i, e := range embeddings {
+		if e == nil {
+			return nil, fmt.Errorf("openai did not return embedding for input index %d (batch size %d)", i, len(contents))
+		}
 	}
 	return embeddings, nil
 }

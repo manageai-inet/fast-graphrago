@@ -41,9 +41,10 @@ type RelationMetadata struct {
 
 // GraphRAGServiceImpl coordinates extraction and storage.
 type GraphRAGServiceImpl struct {
-	serviceName string
-	VectorStore asset_manager.VectorStorage
-	AssetStore  asset_manager.AssetStorage
+	serviceName   string
+	VectorStore   asset_manager.VectorStorage
+	AssetStore    asset_manager.AssetStorage
+	matrixCache   sync.Map // key: "kbId:version:label" → models.TransitionMatrix
 	GraphRAGServiceCompileTimeOptions
 	GraphRAGServiceRuntimeOptions
 	asset_manager.LoggingCapacity
@@ -536,10 +537,13 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, embedErr
 		}
 	} else {
+		embedCtx, embedCancel := context.WithCancel(ctx)
+		defer embedCancel()
 		vectorAssets = make([]asset_manager.VectorAsset, 0, len(entityAssets))
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 		sem := make(chan struct{}, g.MaxConcurrent)
+		// buffer size = len(entityAssets) so goroutines never block on send
 		errsCh := make(chan error, len(entityAssets))
 		for _, entity := range entityAssets {
 			wg.Add(1)
@@ -547,9 +551,11 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 			go func(vecArray *[]asset_manager.VectorAsset, entity *asset_manager.ContextualAsset) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				v, err := g.VectorStore.EmbedAsset(ctx, entity, nil)
+				v, err := g.VectorStore.EmbedAsset(embedCtx, entity, nil)
 				if err != nil {
+					// send real error before cancelling so it arrives first in the channel
 					errsCh <- err
+					embedCancel()
 					return
 				}
 				entity.EmbeddingModel = v.EmbeddingModel
@@ -565,12 +571,21 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 		}()
 		select {
 		case err := <-errsCh:
+			embedCancel()
 			logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
 			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 		case <-done:
 		}
 	}
 	logger.DebugContext(ctx, "generated embeddings for entities successfully", slog.String("kbId", kbId), slog.Int("entities", len(vectorAssets)))
+
+	for i, v := range vectorAssets {
+		if len(v.EmbededVector) == 0 {
+			msg := fmt.Sprintf("entity at index %d has nil or empty embedding, assetId: %s", i, v.AssetId)
+			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, fmt.Errorf("%s", msg)
+		}
+	}
 
 	allAssets := make([]asset_manager.ContextualAsset, 0, 1+len(pageAssets)+len(chunkAssets)+len(entityAssets)+len(relationAssets))
 	allAssets = append(allAssets, seedAsset)
@@ -580,27 +595,36 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 	allAssets = append(allAssets, relationAssets...)
 	logger.DebugContext(ctx, "prepared all assets successfully", slog.String("kbId", kbId), slog.Int("assets", len(allAssets)))
 
-	// 5. Store Vectors
+	// 5. Store Vectors (batched to avoid oversized bulk payloads causing EOF from the vector store)
 	logger.DebugContext(ctx, "storing vectors", slog.String("kbId", kbId), slog.Int("vectors", len(vectorAssets)))
-	_, err = g.VectorStore.InsertBatchVectors(ctx, vectorAssets)
-	if err != nil {
-		logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
-		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
+	vectorInsertBatchSize := g.EmbedBatchSize
+	if vectorInsertBatchSize <= 0 {
+		vectorInsertBatchSize = utils.DefaultEmbedBatchSize
+	}
+	for i := 0; i < len(vectorAssets); i += vectorInsertBatchSize {
+		end := min(i+vectorInsertBatchSize, len(vectorAssets))
+		_, err = g.VectorStore.InsertBatchVectors(ctx, vectorAssets[i:end])
+		if err != nil {
+			logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId), slog.Int("batchStart", i), slog.Int("batchEnd", end))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
+		}
 	}
 	logger.DebugContext(ctx, "stored vectors successfully", slog.String("kbId", kbId), slog.Int("vectors", len(vectorAssets)))
 
-	// 6. Store Assets
+	// 6. Store Assets (batched to avoid oversized bulk payloads causing EOF from the asset store)
 	logger.DebugContext(ctx, "storing assets", slog.String("kbId", kbId), slog.Int("assets", len(allAssets)))
-	_, err = g.AssetStore.InsertBatchAssets(ctx, allAssets)
-	if err != nil {
-		// delete vectors
-		_, derr := g.VectorStore.DeleteVectorsByKbIdAndVersion(ctx, kbId, &tsVersion)
-		if derr != nil {
-			msg := fmt.Sprintf("failed to delete vectors: %s", derr.Error())
-			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
+	for i := 0; i < len(allAssets); i += utils.DefaultAssetInsertBatchSize {
+		end := min(i+utils.DefaultAssetInsertBatchSize, len(allAssets))
+		_, err = g.AssetStore.InsertBatchAssets(ctx, allAssets[i:end])
+		if err != nil {
+			_, derr := g.VectorStore.DeleteVectorsByKbIdAndVersion(ctx, kbId, &tsVersion)
+			if derr != nil {
+				msg := fmt.Sprintf("failed to delete vectors: %s", derr.Error())
+				logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
+			}
+			logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId), slog.Int("batchStart", i), slog.Int("batchEnd", end))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 		}
-		logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
-		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 	}
 	logger.DebugContext(ctx, "stored assets successfully", slog.String("kbId", kbId), slog.Int("assets", len(allAssets)))
 
@@ -608,10 +632,24 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 	return allAssets, vectorAssets, nil
 }
 
+func matrixCacheKey(kbId string, version int, label *string) string {
+	labelStr := ""
+	if label != nil {
+		labelStr = *label
+	}
+	return fmt.Sprintf("%s:%d:%s", kbId, version, labelStr)
+}
+
 func (g *GraphRAGServiceImpl) getTransitionMatrixForKbId(ctx context.Context, entityAssets []asset_manager.ContextualAsset, label *string) (models.TransitionMatrix, error) {
 	logger := asset_manager.GetLogger(g)
 	kbId := entityAssets[0].KbId
 	version := entityAssets[0].Version
+
+	cacheKey := matrixCacheKey(kbId, version, label)
+	if cached, ok := g.matrixCache.Load(cacheKey); ok {
+		logger.DebugContext(ctx, "transition matrix cache hit", slog.String("kbId", kbId), slog.Int("version", version))
+		return cached.(models.TransitionMatrix), nil
+	}
 
 	entityIndiceToId := make([]string, 0, len(entityAssets))
 	entityIDToIndex := make(map[string]int, len(entityAssets))
@@ -728,7 +766,10 @@ func (g *GraphRAGServiceImpl) getTransitionMatrixForKbId(ctx context.Context, en
 		}
 	}
 
-	return models.TransitionMatrix{CSR: pCSR, EntityIndiceToId: entityIndiceToId, EntityIDToIndex: entityIDToIndex, Dim: len(entityIndiceToId)}, nil
+	matrix := models.TransitionMatrix{CSR: pCSR, EntityIndiceToId: entityIndiceToId, EntityIDToIndex: entityIDToIndex, Dim: len(entityIndiceToId)}
+	g.matrixCache.Store(cacheKey, matrix)
+	logger.DebugContext(ctx, "transition matrix cached", slog.String("kbId", kbId), slog.Int("version", version), slog.Int("dim", matrix.Dim))
+	return matrix, nil
 }
 
 func (g *GraphRAGServiceImpl) getSeedVector(
@@ -761,13 +802,17 @@ func (g *GraphRAGServiceImpl) getSeedVector(
 		}
 	}
 	var w [3]float32
-	w[0] = weights[0] / float32(countNamed)
-	w[1] = weights[1] / float32(countGeneric)
+	if countNamed > 0 {
+		w[0] = weights[0] / float32(countNamed)
+	}
+	if countGeneric > 0 {
+		w[1] = weights[1] / float32(countGeneric)
+	}
 	w[2] = weights[2]
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	// query in concurrency
+	dim := transitionMatrix.Dim
 	sem := make(chan struct{}, g.MaxConcurrent)
 	for _, queryEntity := range queryEntities {
 		wg.Add(1)
@@ -777,7 +822,6 @@ func (g *GraphRAGServiceImpl) getSeedVector(
 			defer func() { <-sem }()
 			retrievedAssets, err := g.VectorStore.QueryVectors(ctx, qe.Embedding, &topK, &threshold, &filter)
 			if err != nil {
-				// if failed to retrieve, skip this query entity
 				msg := "failed to retrieve vectors for query entity, skipping, cause: " + err.Error()
 				logger.WarnContext(
 					ctx, msg,
@@ -793,23 +837,26 @@ func (g *GraphRAGServiceImpl) getSeedVector(
 			} else if qe.Type == models.GenericEntityType {
 				weight = w[1]
 			}
-			mu.Lock()
+			// accumulate into a local vector to avoid holding the lock during iteration
+			localVec := make([]float32, dim)
 			for _, retrievedAsset := range retrievedAssets {
 				idx, ok := transitionMatrix.EntityIDToIndex[retrievedAsset.AssetId]
 				if !ok {
 					continue
 				}
 				if retrievedAsset.Score == nil {
-					msg := "retrieved asset has no score, skipping"
-					logger.WarnContext(
-						ctx, msg,
+					logger.WarnContext(ctx, "retrieved asset has no score, skipping",
 						slog.String("kbId", kbId),
 						slog.String("entity", retrievedAsset.AssetId),
 						slog.String("entityType", qe.Type),
 					)
 					continue
 				}
-				sVec[idx] += float32(*retrievedAsset.Score) * weight
+				localVec[idx] += float32(*retrievedAsset.Score) * weight
+			}
+			mu.Lock()
+			for i, v := range localVec {
+				sVec[i] += v
 			}
 			mu.Unlock()
 		}(queryEntity)
@@ -839,40 +886,49 @@ func (g *GraphRAGServiceImpl) ppr(ctx context.Context, s []float32, P *sparse.CS
 	if len(s) != rm.I {
 		return []float32{}, fmt.Errorf("s and P dimension mismatch")
 	}
-	data := rm.Data
 	indptr := rm.Indptr
 	indices := rm.Ind
 	_, cols := P.Dims()
 
-	// 2. Initialize v as the seed vector
+	// precompute float32 copy of the CSR data to avoid per-element float64→float32
+	// conversion inside the hot triple-nested loop
+	data32 := make([]float32, len(rm.Data))
+	for i, v := range rm.Data {
+		data32[i] = float32(v)
+	}
+
 	v := make([]float32, cols)
 	copy(v, s)
 	vNext := make([]float32, cols)
-
 	oneMinusAlpha := 1.0 - alpha
 
-	// 3. Power Iteration Loop
 	for it := 0; it < g.MaxWalks; it++ {
-		for i := range vNext {
-			vNext[i] = 0
-		}
+		clear(vNext)
 
-		// 1. Random Walk Step: vNext = v * P
-		for i := 0; i < len(v); i++ {
-			if v[i] == 0 {
+		// Random Walk Step: vNext = v * P
+		for i, vi := range v {
+			if vi == 0 {
 				continue
 			}
-
 			start, end := indptr[i], indptr[i+1]
 			for k := start; k < end; k++ {
-				colIdx := indices[k]
-				vNext[colIdx] += v[i] * float32(data[k])
+				vNext[indices[k]] += vi * data32[k]
 			}
 		}
 
-		// 2. Personalization Step: v = (alpha * vNext) + ((1-alpha) * s)
-		for i := 0; i < cols; i++ {
-			v[i] = (alpha * vNext[i]) + (oneMinusAlpha * s[i])
+		// Personalization Step + convergence check
+		var delta float32
+		for i := range v {
+			newV := alpha*vNext[i] + oneMinusAlpha*s[i]
+			d := newV - v[i]
+			if d < 0 {
+				d = -d
+			}
+			delta += d
+			v[i] = newV
+		}
+		if delta < utils.DefaultPPRConvergenceThreshold {
+			break
 		}
 	}
 
@@ -975,19 +1031,11 @@ func (g *GraphRAGServiceImpl) retrieveForKbId(ctx context.Context, queryEntities
 			ContextualAsset: entityAsset,
 			Score:           &score,
 		}
-		logger.Debug("scored entity", slog.Float64("score", float64(score)), slog.String("content", retrievedAsset.Content))
+		logger.DebugContext(ctx, "scored entity", slog.Float64("score", float64(score)), slog.String("content", retrievedAsset.Content))
 		scoredEnities = append(scoredEnities, retrievedAsset)
 	}
+	// scores come directly from rankedVector (non-nil float32 values), nil checks not needed
 	slices.SortFunc(scoredEnities, func(a, b asset_manager.RetrievedAsset) int {
-		if a.Score == nil && b.Score == nil {
-			return 0
-		}
-		if a.Score == nil {
-			return -1
-		}
-		if b.Score == nil {
-			return 1
-		}
 		return cmp.Compare(*b.Score, *a.Score)
 	})
 	logger.InfoContext(
@@ -1071,7 +1119,7 @@ func (g *GraphRAGServiceImpl) Retrieve(ctx context.Context, query string, kbIds 
 			vector, err := g.VectorStore.EmbedContent(ctx, qe.Name)
 			if err != nil {
 				if qe.Type != models.QueryEntityType {
-					logger.Warn("failed to embed entity extracted from query, skipping this entity: "+err.Error(), slog.String("entity", qe.Name), slog.String("entityType", qe.Type))
+					logger.WarnContext(ctx, "failed to embed entity extracted from query, skipping this entity: "+err.Error(), slog.String("entity", qe.Name), slog.String("entityType", qe.Type))
 					return
 				}
 				errChan <- err
@@ -1084,12 +1132,13 @@ func (g *GraphRAGServiceImpl) Retrieve(ctx context.Context, query string, kbIds 
 		}(&qe)
 	}
 	wg.Wait()
+	close(errChan)
 	if len(errChan) > 0 {
-		var err error
+		var embedErrs []error
 		for e := range errChan {
-			err = fmt.Errorf("%w\n%s", err, e.Error())
+			embedErrs = append(embedErrs, e)
 		}
-		return []asset_manager.RetrievedAsset{}, []asset_manager.ContextualAsset{}, err
+		return []asset_manager.RetrievedAsset{}, []asset_manager.ContextualAsset{}, errors.Join(embedErrs...)
 	}
 
 	if len(embeddedQueryEntities) == 0 {
@@ -1135,17 +1184,8 @@ func (g *GraphRAGServiceImpl) Retrieve(ctx context.Context, query string, kbIds 
 		logger.WarnContext(ctx, msg, slog.String("query", query), slog.Any("kbIds", kbIds), slog.Float64("threshold", float64(*runOpts.Threshold)))
 		return []asset_manager.RetrievedAsset{}, []asset_manager.ContextualAsset{}, nil
 	}
-	// sort by score
+	// sort by score — filtered above already ensures Score != nil
 	slices.SortFunc(filteredEntityAssets, func(a, b asset_manager.RetrievedAsset) int {
-		if a.Score == nil && b.Score == nil {
-			return 0
-		}
-		if a.Score == nil {
-			return -1
-		}
-		if b.Score == nil {
-			return 1
-		}
 		return cmp.Compare(*b.Score, *a.Score)
 	})
 	logger.DebugContext(ctx, "filtered entity assets", slog.String("query", query), slog.Any("kbIds", kbIds), slog.Int("filteredEntityAssets", len(filteredEntityAssets)))

@@ -39,11 +39,13 @@ const DefaultMaxRetryAttempt = 1
 const DefaultMaxConcurrent = 5
 const DefaultBatchSize = 5
 const DefaultEmbedBatchSize = 32
+const DefaultAssetInsertBatchSize = 200
 const DefaultEmbedRetryAttempts = 3
 const DefaultEmbedRetryDelay = 500 * time.Millisecond
 const DefaultDedupBatchSize = 5
 const DefaultMaxWalks = 100
 const DefaultDampingFactor = 0.5
+const DefaultPPRConvergenceThreshold = float32(1e-6)
 const DefaultTopK = 50
 const DefaultThreshold = float32(0.3)
 
