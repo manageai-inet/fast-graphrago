@@ -73,7 +73,7 @@ func (f *FastGraphIndexer) Index(ctx context.Context, kbId string, sources []am.
 	}
 	var embedModel *string
 	var embedDim int
-	if len(vectors) >= 0 {
+	if len(vectors) > 0 {
 		// All vector should be embedded by the same embedding model
 		asset_count[am.AssetTypeVector] = len(vectors)
 		embedModel = vectors[0].EmbeddingModel
