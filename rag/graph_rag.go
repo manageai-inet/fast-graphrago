@@ -1031,7 +1031,7 @@ func (g *GraphRAGServiceImpl) retrieveForKbId(ctx context.Context, queryEntities
 			ContextualAsset: entityAsset,
 			Score:           &score,
 		}
-		logger.Debug("scored entity", slog.Float64("score", float64(score)), slog.String("content", retrievedAsset.Content))
+		logger.DebugContext(ctx, "scored entity", slog.Float64("score", float64(score)), slog.String("content", retrievedAsset.Content))
 		scoredEnities = append(scoredEnities, retrievedAsset)
 	}
 	// scores come directly from rankedVector (non-nil float32 values), nil checks not needed
@@ -1119,7 +1119,7 @@ func (g *GraphRAGServiceImpl) Retrieve(ctx context.Context, query string, kbIds 
 			vector, err := g.VectorStore.EmbedContent(ctx, qe.Name)
 			if err != nil {
 				if qe.Type != models.QueryEntityType {
-					logger.Warn("failed to embed entity extracted from query, skipping this entity: "+err.Error(), slog.String("entity", qe.Name), slog.String("entityType", qe.Type))
+					logger.WarnContext(ctx, "failed to embed entity extracted from query, skipping this entity: "+err.Error(), slog.String("entity", qe.Name), slog.String("entityType", qe.Type))
 					return
 				}
 				errChan <- err
