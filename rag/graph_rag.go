@@ -536,10 +536,13 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, embedErr
 		}
 	} else {
+		embedCtx, embedCancel := context.WithCancel(ctx)
+		defer embedCancel()
 		vectorAssets = make([]asset_manager.VectorAsset, 0, len(entityAssets))
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 		sem := make(chan struct{}, g.MaxConcurrent)
+		// buffer size = len(entityAssets) so goroutines never block on send
 		errsCh := make(chan error, len(entityAssets))
 		for _, entity := range entityAssets {
 			wg.Add(1)
@@ -547,9 +550,11 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 			go func(vecArray *[]asset_manager.VectorAsset, entity *asset_manager.ContextualAsset) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				v, err := g.VectorStore.EmbedAsset(ctx, entity, nil)
+				v, err := g.VectorStore.EmbedAsset(embedCtx, entity, nil)
 				if err != nil {
+					// send real error before cancelling so it arrives first in the channel
 					errsCh <- err
+					embedCancel()
 					return
 				}
 				entity.EmbeddingModel = v.EmbeddingModel
@@ -565,6 +570,7 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 		}()
 		select {
 		case err := <-errsCh:
+			embedCancel()
 			logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
 			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 		case <-done:
@@ -580,27 +586,36 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 	allAssets = append(allAssets, relationAssets...)
 	logger.DebugContext(ctx, "prepared all assets successfully", slog.String("kbId", kbId), slog.Int("assets", len(allAssets)))
 
-	// 5. Store Vectors
+	// 5. Store Vectors (batched to avoid oversized bulk payloads causing EOF from the vector store)
 	logger.DebugContext(ctx, "storing vectors", slog.String("kbId", kbId), slog.Int("vectors", len(vectorAssets)))
-	_, err = g.VectorStore.InsertBatchVectors(ctx, vectorAssets)
-	if err != nil {
-		logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
-		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
+	vectorInsertBatchSize := g.EmbedBatchSize
+	if vectorInsertBatchSize <= 0 {
+		vectorInsertBatchSize = utils.DefaultEmbedBatchSize
+	}
+	for i := 0; i < len(vectorAssets); i += vectorInsertBatchSize {
+		end := min(i+vectorInsertBatchSize, len(vectorAssets))
+		_, err = g.VectorStore.InsertBatchVectors(ctx, vectorAssets[i:end])
+		if err != nil {
+			logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId), slog.Int("batchStart", i), slog.Int("batchEnd", end))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
+		}
 	}
 	logger.DebugContext(ctx, "stored vectors successfully", slog.String("kbId", kbId), slog.Int("vectors", len(vectorAssets)))
 
-	// 6. Store Assets
+	// 6. Store Assets (batched to avoid oversized bulk payloads causing EOF from the asset store)
 	logger.DebugContext(ctx, "storing assets", slog.String("kbId", kbId), slog.Int("assets", len(allAssets)))
-	_, err = g.AssetStore.InsertBatchAssets(ctx, allAssets)
-	if err != nil {
-		// delete vectors
-		_, derr := g.VectorStore.DeleteVectorsByKbIdAndVersion(ctx, kbId, &tsVersion)
-		if derr != nil {
-			msg := fmt.Sprintf("failed to delete vectors: %s", derr.Error())
-			logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
+	for i := 0; i < len(allAssets); i += utils.DefaultAssetInsertBatchSize {
+		end := min(i+utils.DefaultAssetInsertBatchSize, len(allAssets))
+		_, err = g.AssetStore.InsertBatchAssets(ctx, allAssets[i:end])
+		if err != nil {
+			_, derr := g.VectorStore.DeleteVectorsByKbIdAndVersion(ctx, kbId, &tsVersion)
+			if derr != nil {
+				msg := fmt.Sprintf("failed to delete vectors: %s", derr.Error())
+				logger.ErrorContext(ctx, msg, slog.String("kbId", kbId))
+			}
+			logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId), slog.Int("batchStart", i), slog.Int("batchEnd", end))
+			return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 		}
-		logger.ErrorContext(ctx, err.Error(), slog.String("kbId", kbId))
-		return []asset_manager.ContextualAsset{}, []asset_manager.VectorAsset{}, err
 	}
 	logger.DebugContext(ctx, "stored assets successfully", slog.String("kbId", kbId), slog.Int("assets", len(allAssets)))
 
@@ -1084,12 +1099,13 @@ func (g *GraphRAGServiceImpl) Retrieve(ctx context.Context, query string, kbIds 
 		}(&qe)
 	}
 	wg.Wait()
+	close(errChan)
 	if len(errChan) > 0 {
-		var err error
+		var embedErrs []error
 		for e := range errChan {
-			err = fmt.Errorf("%w\n%s", err, e.Error())
+			embedErrs = append(embedErrs, e)
 		}
-		return []asset_manager.RetrievedAsset{}, []asset_manager.ContextualAsset{}, err
+		return []asset_manager.RetrievedAsset{}, []asset_manager.ContextualAsset{}, errors.Join(embedErrs...)
 	}
 
 	if len(embeddedQueryEntities) == 0 {

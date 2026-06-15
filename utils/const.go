@@ -39,6 +39,7 @@ const DefaultMaxRetryAttempt = 1
 const DefaultMaxConcurrent = 5
 const DefaultBatchSize = 5
 const DefaultEmbedBatchSize = 32
+const DefaultAssetInsertBatchSize = 200
 const DefaultEmbedRetryAttempts = 3
 const DefaultEmbedRetryDelay = 500 * time.Millisecond
 const DefaultDedupBatchSize = 5
