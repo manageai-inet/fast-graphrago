@@ -59,19 +59,19 @@ PPR คือ algorithm ที่ใช้หาว่า node ไหนใน g
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    ผู้ใช้ (Caller)                    │
-└────────────────────┬────────────────┬────────────────┘
+│                    ผู้ใช้ (Caller)                     │
+└────────────────────┬────────────────┬───────────────┘
                      │                │
               Index(docs)      Retrieve(query)
                      │                │
 ┌────────────────────▼────────────────▼────────────────┐
-│              FastGraphIndexer  (indexer.go)           │
-│         Public API: Index() / Retrieve()              │
+│              FastGraphIndexer  (indexer.go)          │
+│         Public API: Index() / Retrieve()             │
 └────────────────────┬────────────────┬────────────────┘
                      │                │
 ┌────────────────────▼────────────────▼────────────────┐
-│           GraphRAGServiceImpl  (rag/graph_rag.go)     │
-│     แกนกลางของระบบ — ประสาน Extraction, Embedding,    │
+│           GraphRAGServiceImpl  (rag/graph_rag.go)    │
+│     แกนกลางของระบบ — ประสาน Extraction, Embedding,   │
 │     Graph Construction, PageRank ทั้งหมด               │
 └──┬──────────────┬──────────────┬───────────────┬─────┘
    │              │              │               │
@@ -207,12 +207,12 @@ Input: []KnowledgeSource (page-level content)
 [Step 3] GraphExtractor.ExtractGraph  ← ใช้ LLM
          ┌──────────────────────────────────────────┐
          │ แบ่ง chunks เป็น batch (default: 5 chunks) │
-         │ แต่ละ batch ส่งให้ LLM พร้อมกัน (concurrent)│
-         │                                           │
-         │ LLM → entity list + relation list         │
+         │ แต่ละ batch ส่งให้ LLM พร้อมกัน (concurrent)  │
+         │                                          │
+         │ LLM → entity list + relation list        │
          │ normalize ชื่อ entity (lowercase)          │
-         │ merge entity ที่ซ้ำกันข้าม batch           │
-         │ deduplicate relation ที่ซ้ำกัน (LLM อีกรอบ)│
+         │ merge entity ที่ซ้ำกันข้าม batch              │
+         │ deduplicate relation ที่ซ้ำกัน (LLM อีกรอบ)   │
          └──────────────────────────────────────────┘
          │
          ▼
