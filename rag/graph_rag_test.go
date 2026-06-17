@@ -380,6 +380,55 @@ func (m *mockQueryVectorStore) DeleteVectorsByKbIdAndVersion(ctx context.Context
 	return 0, nil
 }
 
+// flakyVectorStore embeds mockQueryVectorStore and overrides EmbedAsset to fail a
+// fixed number of times before succeeding, simulating a transient/malformed embedder response.
+type flakyVectorStore struct {
+	mockQueryVectorStore
+	mu           sync.Mutex
+	failuresLeft int
+	calls        int
+}
+
+func (m *flakyVectorStore) EmbedAsset(ctx context.Context, asset *asset_manager.ContextualAsset, contentConstructorFn *func(asset_manager.ContextualAsset) string) (asset_manager.VectorAsset, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.failuresLeft > 0 {
+		m.failuresLeft--
+		return asset_manager.VectorAsset{}, errors.New("invalid value in embedding array at index 0, expected float64, got <nil>")
+	}
+	return asset_manager.VectorAsset{AssetId: asset.AssetId, EmbededVector: []float32{1, 2, 3}}, nil
+}
+
+func TestEmbedAssetWithRetry_RetriesThenSucceeds(t *testing.T) {
+	store := &flakyVectorStore{failuresLeft: 2}
+	entity := &asset_manager.ContextualAsset{AssetId: "entity-0"}
+
+	v, err := embedAssetWithRetry(context.Background(), store, entity, nil, 3, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.calls != 3 {
+		t.Fatalf("expected 3 calls, got %d", store.calls)
+	}
+	if v.AssetId != "entity-0" {
+		t.Fatalf("AssetId: got %q, want %q", v.AssetId, "entity-0")
+	}
+}
+
+func TestEmbedAssetWithRetry_FailsAfterExhaustingRetries(t *testing.T) {
+	store := &flakyVectorStore{failuresLeft: 5}
+	entity := &asset_manager.ContextualAsset{AssetId: "entity-0"}
+
+	_, err := embedAssetWithRetry(context.Background(), store, entity, nil, 3, 0)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if store.calls != 3 {
+		t.Fatalf("expected 3 calls, got %d", store.calls)
+	}
+}
+
 func TestDedupeContextualAssetsPreservesOrder(t *testing.T) {
 	input := []asset_manager.ContextualAsset{
 		{AssetId: "a"},
