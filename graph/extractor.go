@@ -472,7 +472,12 @@ func (f *FastGraphExtractor) ExtractGraphFromChunks(ctx context.Context, chunks 
 		entity.Name = utils.NormalizeName(entity.Name)
 		entity.Type = utils.NormalizeName(entity.Type)
 		if entity.ChunkIndex < 0 || entity.ChunkIndex >= len(chunks) {
-			return models.GraphAssets{}, fmt.Errorf("entity %q has invalid chunk_index %d (batch size %d)", entity.Name, entity.ChunkIndex, len(chunks))
+			logger.WarnContext(ctx, "entity has invalid chunk_index, clamping to 0",
+				slog.String("entity", entity.Name),
+				slog.Int("chunk_index", entity.ChunkIndex),
+				slog.Int("batch_size", len(chunks)),
+			)
+			entity.ChunkIndex = 0
 		}
 		entityAssets = append(entityAssets, models.EntityAsset{
 			Name:        entity.Name,
@@ -489,7 +494,13 @@ func (f *FastGraphExtractor) ExtractGraphFromChunks(ctx context.Context, chunks 
 		relation.Target.Name = utils.NormalizeName(relation.Target.Name)
 		relation.Target.Type = utils.NormalizeName(relation.Target.Type)
 		if relation.ChunkIndex < 0 || relation.ChunkIndex >= len(chunks) {
-			return models.GraphAssets{}, fmt.Errorf("relation %q→%q has invalid chunk_index %d (batch size %d)", relation.Source.Name, relation.Target.Name, relation.ChunkIndex, len(chunks))
+			logger.WarnContext(ctx, "relation has invalid chunk_index, clamping to 0",
+				slog.String("source", relation.Source.Name),
+				slog.String("target", relation.Target.Name),
+				slog.Int("chunk_index", relation.ChunkIndex),
+				slog.Int("batch_size", len(chunks)),
+			)
+			relation.ChunkIndex = 0
 		}
 		if _, ok := entityKeyToId[relation.Source.Name+"|"+relation.Source.Type]; !ok {
 			inferred := f.inferMissingEntity(ctx, logger, relation.Source.Name, relation.Source.Type, relation.ChunkIndex, chunks)
