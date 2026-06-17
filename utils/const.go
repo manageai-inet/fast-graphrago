@@ -1,7 +1,9 @@
 package utils
 
-import "strings"
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const DefaultDomain = "enterprise"
 
@@ -40,8 +42,8 @@ const DefaultMaxConcurrent = 5
 const DefaultBatchSize = 5
 const DefaultEmbedBatchSize = 32
 const DefaultAssetInsertBatchSize = 200
-const DefaultEmbedRetryAttempts = 3
-const DefaultEmbedRetryDelay = 500 * time.Millisecond
+const DefaultEmbedRetryAttempts = 5
+const DefaultEmbedRetryDelay = 2 * time.Second
 const DefaultDedupBatchSize = 5
 const DefaultMaxWalks = 100
 const DefaultDampingFactor = 0.5

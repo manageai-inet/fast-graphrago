@@ -185,7 +185,9 @@ func TestBatchEmbed_EmbedBatchError(t *testing.T) {
 	expectedErr := errors.New("embed API unavailable")
 	emb := &mockEmbedderWithError{model: "test-model", dim: 3, err: expectedErr}
 
-	vecs, err := batchEmbed(context.Background(), entities, emb, 50)
+	// explicit attempts=1/delay=0 keeps this test fast; retry timing itself is covered by
+	// TestBatchEmbed_RetriesBatchThenSucceeds and TestBatchEmbed_FallsBackToSingleItemEmbedding.
+	vecs, err := batchEmbedWithRetry(context.Background(), entities, emb, 50, nil, 1, 0)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -378,6 +380,96 @@ func (m *mockQueryVectorStore) DeleteVectorsByKbId(ctx context.Context, kbId str
 
 func (m *mockQueryVectorStore) DeleteVectorsByKbIdAndVersion(ctx context.Context, kbId string, version *int) (int, error) {
 	return 0, nil
+}
+
+// flakyVectorStore embeds mockQueryVectorStore and overrides EmbedAsset to fail a
+// fixed number of times before succeeding, simulating a transient/malformed embedder response.
+type flakyVectorStore struct {
+	mockQueryVectorStore
+	mu           sync.Mutex
+	failuresLeft int
+	calls        int
+}
+
+func (m *flakyVectorStore) EmbedAsset(ctx context.Context, asset *asset_manager.ContextualAsset, contentConstructorFn *func(asset_manager.ContextualAsset) string) (asset_manager.VectorAsset, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.failuresLeft > 0 {
+		m.failuresLeft--
+		return asset_manager.VectorAsset{}, errors.New("invalid value in embedding array at index 0, expected float64, got <nil>")
+	}
+	return asset_manager.VectorAsset{AssetId: asset.AssetId, EmbededVector: []float32{1, 2, 3}}, nil
+}
+
+func TestEmbedAssetWithRetry_RetriesThenSucceeds(t *testing.T) {
+	store := &flakyVectorStore{failuresLeft: 2}
+	entity := &asset_manager.ContextualAsset{AssetId: "entity-0"}
+
+	v, err := embedAssetWithRetry(context.Background(), store, entity, nil, 3, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.calls != 3 {
+		t.Fatalf("expected 3 calls, got %d", store.calls)
+	}
+	if v.AssetId != "entity-0" {
+		t.Fatalf("AssetId: got %q, want %q", v.AssetId, "entity-0")
+	}
+}
+
+func TestEmbedAssetWithRetry_FailsAfterExhaustingRetries(t *testing.T) {
+	store := &flakyVectorStore{failuresLeft: 5}
+	entity := &asset_manager.ContextualAsset{AssetId: "entity-0"}
+
+	_, err := embedAssetWithRetry(context.Background(), store, entity, nil, 3, 0)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if store.calls != 3 {
+		t.Fatalf("expected 3 calls, got %d", store.calls)
+	}
+}
+
+// partialFailureVectorStore embeds mockQueryVectorStore; EmbedAsset always fails for asset IDs
+// in failIDs (simulating a deterministic malformed embedder response) and succeeds for the rest.
+type partialFailureVectorStore struct {
+	mockQueryVectorStore
+	mu      sync.Mutex
+	failIDs map[string]bool
+	calls   map[string]int
+}
+
+func (m *partialFailureVectorStore) EmbedAsset(ctx context.Context, asset *asset_manager.ContextualAsset, contentConstructorFn *func(asset_manager.ContextualAsset) string) (asset_manager.VectorAsset, error) {
+	m.mu.Lock()
+	if m.calls == nil {
+		m.calls = map[string]int{}
+	}
+	m.calls[asset.AssetId]++
+	m.mu.Unlock()
+	if m.failIDs[asset.AssetId] {
+		return asset_manager.VectorAsset{}, errors.New("invalid value in embedding array at index 0, expected float64, got <nil>")
+	}
+	return asset_manager.VectorAsset{AssetId: asset.AssetId, EmbededVector: []float32{1, 2, 3}}, nil
+}
+
+func TestEmbedEntitiesIndividually_SkipsPermanentlyFailingEntity(t *testing.T) {
+	entities := makeTestEntities(3) // entity-0, entity-1, entity-2
+	store := &partialFailureVectorStore{failIDs: map[string]bool{"entity-1": true}}
+
+	vectors := embedEntitiesIndividually(context.Background(), entities, store, 2, nil, 2, 0)
+
+	if len(vectors) != 2 {
+		t.Fatalf("expected 2 vectors (one entity skipped), got %d", len(vectors))
+	}
+	for _, v := range vectors {
+		if v.AssetId == "entity-1" {
+			t.Fatalf("expected entity-1 to be skipped, but it was embedded")
+		}
+	}
+	if store.calls["entity-1"] != 2 {
+		t.Fatalf("expected entity-1 to be retried 2 times before being skipped, got %d", store.calls["entity-1"])
+	}
 }
 
 func TestDedupeContextualAssetsPreservesOrder(t *testing.T) {
