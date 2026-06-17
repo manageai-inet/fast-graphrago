@@ -235,6 +235,47 @@ func embedSingleWithRetry(ctx context.Context, embedder asset_manager.Embedder, 
 	return nil, fmt.Errorf("single-item embedding failed at batch index %d: %w", index, lastErr)
 }
 
+// embedAssetWithRetry retries a single VectorStore.EmbedAsset call so a transient or
+// malformed embedder response doesn't abort the whole per-entity embedding fan-out.
+func embedAssetWithRetry(ctx context.Context, vectorStore asset_manager.VectorStorage, entity *asset_manager.ContextualAsset, logger *slog.Logger, attempts int, delay time.Duration) (asset_manager.VectorAsset, error) {
+	if attempts <= 0 {
+		attempts = utils.DefaultEmbedRetryAttempts
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		v, err := vectorStore.EmbedAsset(ctx, entity, nil)
+		if err == nil {
+			return v, nil
+		}
+		lastErr = err
+		if attempt == attempts {
+			break
+		}
+		if logger != nil {
+			logger.WarnContext(ctx, "retrying entity embedding after failure",
+				slog.String("assetId", entity.AssetId),
+				slog.Int("attempt", attempt),
+				slog.Int("maxAttempts", attempts),
+				slog.Duration("retryDelay", delay),
+				slog.String("error", err.Error()),
+			)
+		}
+		if sleepErr := sleepWithContext(ctx, delay); sleepErr != nil {
+			return asset_manager.VectorAsset{}, sleepErr
+		}
+	}
+	if logger != nil {
+		logger.ErrorContext(ctx, "entity embedding failed after retries",
+			slog.String("assetId", entity.AssetId),
+			slog.String("error", lastErr.Error()),
+		)
+	}
+	return asset_manager.VectorAsset{}, fmt.Errorf("entity embedding failed for assetId %s: %w", entity.AssetId, lastErr)
+}
+
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	if delay <= 0 {
 		return nil
@@ -551,7 +592,7 @@ func (g *GraphRAGServiceImpl) Index(ctx context.Context, kbId string, sources []
 			go func(vecArray *[]asset_manager.VectorAsset, entity *asset_manager.ContextualAsset) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				v, err := g.VectorStore.EmbedAsset(embedCtx, entity, nil)
+				v, err := embedAssetWithRetry(embedCtx, g.VectorStore, entity, logger, g.EmbedRetryAttempts, g.EmbedRetryDelay)
 				if err != nil {
 					// send real error before cancelling so it arrives first in the channel
 					errsCh <- err
